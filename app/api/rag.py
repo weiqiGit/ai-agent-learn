@@ -6,6 +6,8 @@ from app.services.rag_service import (
     delete_file,
     get_files,
     ask_question_rag,
+    normal_chat_stream,
+    need_retrieval,
 )
 from fastapi.responses import StreamingResponse
 
@@ -31,9 +33,14 @@ async def ask(
     request: QuestionRequest,
 ):
     try:
-        return StreamingResponse(
-            ask_question_rag(request.question), media_type="text/event-stream"
-        )
+        if need_retrieval(request.question):
+            return StreamingResponse(
+                ask_question_rag(request.question), media_type="text/event-stream"
+            )
+        else:
+            return StreamingResponse(
+                normal_chat_stream(request.question), media_type="text/event-stream"
+            )
 
     except Exception as e:
         return StreamingResponse(

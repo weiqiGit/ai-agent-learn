@@ -8,9 +8,11 @@ from app.core.rag_engine import (
     create_qa_chain,
     delete_file_from_store,
     get_files_list,
-    ask_question_stream,
+    stream_rag_answer,
+    stream_answer,
 )
 from typing import AsyncIterator
+from app.services.constants import NO_RETRIEVAL_KEYWORDS
 
 UPLOAD_DIR = "./uploads"
 
@@ -75,5 +77,20 @@ async def ask_question_rag(question: str) -> AsyncIterator[str]:
     # 2. LLM 判断（如意图识别）
     # 3. 降级逻辑（如模型不可用用备用方案）
     # 4. 埋点/日志
-    async for chunk in ask_question_stream(question):
+    async for chunk in stream_rag_answer(question):
         yield chunk
+
+
+# 无rag普通流式
+async def normal_chat_stream(question: str) -> AsyncIterator[str]:
+    async for chunk in stream_answer(question):
+        yield chunk
+
+
+# 判断是否需要检索知识库
+def need_retrieval(question: str) -> bool:
+    q_lower = question.lower()
+    for kw in NO_RETRIEVAL_KEYWORDS:
+        if kw in q_lower:
+            return False
+    return True

@@ -1,6 +1,7 @@
 # RAG 核心逻辑（加载、切片、向量库）
 import os
 import json
+import time
 
 # 读取 PDF 和 TXT 文件，转成 Document 对象
 from langchain_community.document_loaders import PyPDFLoader, TextLoader
@@ -20,11 +21,14 @@ from langchain.chains import RetrievalQA
 # 把文本转化成向量
 from langchain_community.embeddings import ZhipuAIEmbeddings
 from typing import List, AsyncIterator
+from dotenv import load_dotenv
+
 
 # 向量库持久化目录
 PERSIST_DIR = "./chroma_db"
 DEFAULT_SESSION = "default"
 
+load_dotenv()
 api_key = os.getenv("ZHIPUAI_API_KEY")
 if not api_key:
     raise ValueError("请设置环境变量 ZHIPUAI_API_KEY")
@@ -60,18 +64,27 @@ def split_texts(documents, chunk_size=500, chunk_overlap=50):
     return chunks
 
 
+_vectordb_cache = None
+
+
 # 获取会话级向量库+添加数据
 def get_vector_store(chunks=None):
+    global _vectordb_cache
+    if _vectordb_cache is not None:
+        # 如果有新文档要添加，追加到缓存
+        if chunks:
+            _vectordb_cache.add_documents(chunks)
+        return _vectordb_cache
     # 获取全局向量库（不存在则自动创建）
     # Chroma 会自动创建目录和空库
-    vectordb = Chroma(
+    _vectordb_cache = Chroma(
         persist_directory=PERSIST_DIR,
         embedding_function=embeddings,
     )
     # 有新文档就追加
     if chunks:
-        vectordb.add_documents(chunks)
-    return vectordb
+        _vectordb_cache.add_documents(chunks)
+    return _vectordb_cache
 
 
 # 获取知识库所有已上传的文件及块数
@@ -136,11 +149,41 @@ def delete_file_from_store(file_name: str) -> int:
 
 
 # 流式问答
-async def ask_question_stream(question: str) -> AsyncIterator[str]:
+async def stream_chat(question: str, context: str) -> AsyncIterator[str]:
+    try:
+        if context:
+            prompt = f"""你是一个专业的知识库助手。请根据以下文档内容回答用户的问题。
+            如果文档中没有相关信息，请如实说"文档中未提及"。
+            不要编造答案，不要使用文档外的知识。
+
+            文档内容：
+            {context}
+
+            用户问题：{question}"""
+        else:
+            prompt = question
+        llm = ChatOpenAI(
+            model="deepseek-chat",
+            api_key=os.getenv("DEEPSEEK_API_KEY"),
+            base_url="https://api.deepseek.com/v1",
+            temperature=0.3 if context else 0.7,
+            streaming=True,
+        )
+        async for chunk in llm.astream(prompt):
+            content = chunk.content
+            if content:
+                yield f"data: {json.dumps({'content': content})}\n\n"
+
+    except Exception as e:
+        yield f"data: {json.dumps({'error': str(e)})}\n\n"
+
+
+# rag流式
+async def stream_rag_answer(question: str) -> AsyncIterator[str]:
     try:
         vectordb = get_vector_store()
         # 把向量库包装成 LangChain 检索器，需要返回4个最相似的文档块
-        retriever = vectordb.as_retriever(search_kwargs={"k": 4})
+        retriever = vectordb.as_retriever(search_kwargs={"k": 3})
         # 组件运行，docs的类型是List[Document]，有page_content和page_meta
         docs = retriever.invoke(question)
 
@@ -154,31 +197,22 @@ async def ask_question_stream(question: str) -> AsyncIterator[str]:
             )
         )
         context = "\n\n".join([doc.page_content for doc in docs])
-
-        prompt = f"""你是一个专业的知识库助手。请根据以下文档内容回答用户的问题。
-            如果文档中没有相关信息，请如实说"文档中未提及"。
-            不要编造答案，不要使用文档外的知识。
-
-            文档内容：
-            {context}
-
-            用户问题：{question}"""
-        llm = ChatOpenAI(
-            model="deepseek-chat",
-            api_key=os.getenv("DEEPSEEK_API_KEY"),
-            base_url="https://api.deepseek.com/v1",
-            temperature=0.3,
-            streaming=True,
-        )
         # 异步流式调用 LLM，每次返回一个字符块,异步迭代，每收到一个字符块就执行一次循环
-        async for chunk in llm.astream(prompt):
-            content = chunk.content
-            if content:
-                yield f"data: {json.dumps({'content': content})}\n\n"
-
+        async for chunk in stream_chat(question, context):
+            yield chunk
         # 返回来源+done
         yield f"data: {json.dumps({'sources': sources, 'done': True})}\n\n"
 
+    except Exception as e:
+        yield f"data: {json.dumps({'error': str(e)})}\n\n"
+
+
+# 普通流式
+async def stream_answer(question: str) -> AsyncIterator[str]:
+    try:
+        async for chunk in stream_chat(question, ""):
+            yield chunk
+        yield f"data: {json.dumps({'done': True})}\n\n"
     except Exception as e:
         yield f"data: {json.dumps({'error': str(e)})}\n\n"
 

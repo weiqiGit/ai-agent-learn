@@ -1,11 +1,9 @@
+import os
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from app.api import chat, rag
-from dotenv import load_dotenv
-import os
 from fastapi.staticfiles import StaticFiles
+from app.api import chat, rag
 
-load_dotenv()
 app = FastAPI(title="AI Agent 服务")
 
 # CORS
