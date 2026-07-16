@@ -1,7 +1,6 @@
 # RAG 核心逻辑（加载、切片、向量库）
 import os
 import json
-import time
 
 # 读取 PDF 和 TXT 文件，转成 Document 对象
 from langchain_community.document_loaders import PyPDFLoader, TextLoader
