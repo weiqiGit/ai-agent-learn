@@ -60,32 +60,6 @@ def split_texts(documents, chunk_size=500, chunk_overlap=50):
     return chunks
 
 
-# 把文档块转成向量，存到 Chroma 里
-def create_vector_store(documents):
-    # kwargs = {'documents':documents,'embedding':embeddings}
-    # if persist:
-    #     kwargs["persist_directory"] = PERSIST_DIR
-
-    vectordb = Chroma.from_documents(
-        documents=documents, persist_directory=PERSIST_DIR, embedding=embeddings
-    )
-    vectordb.persist()
-    return vectordb
-
-
-# 从磁盘加载已有的向量库，不重新创建
-def load_vector_store(chunks):
-    if not os.path.exists(PERSIST_DIR) or not os.listdir(PERSIST_DIR):
-        print("   未找到向量库，正在新建...")
-        return create_vector_store(chunks)
-    else:
-        print("   发现已有向量库，正在加载...")
-        vectordb = Chroma(embedding_function=embeddings, persist_directory=PERSIST_DIR)
-        # 把新的 chunks 添加进去
-        vectordb.add_documents(chunks)
-        return vectordb
-
-
 # 获取会话级向量库+添加数据
 def get_vector_store(chunks=None):
     # 获取全局向量库（不存在则自动创建）
@@ -209,7 +183,7 @@ async def ask_question_stream(question: str) -> AsyncIterator[str]:
         yield f"data: {json.dumps({'error': str(e)})}\n\n"
 
 
-# 非流式——创建问答链，自动检索，拼接prompt，调用llm，返回answer
+# 已弃用  非流式——创建问答链，自动检索，拼接prompt，调用llm，返回answer
 def create_qa_chain(vectordb):
     # 初始化聊天模型
     api_key = os.getenv("DEEPSEEK_API_KEY")
