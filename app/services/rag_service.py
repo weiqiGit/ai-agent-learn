@@ -41,6 +41,7 @@ def upload(file):
     }
 
 
+# 已废弃-RetrievalQA
 def ask_question(question: str):
     # """基于向量库回答问题"""
     vectordb = get_vector_store()

@@ -10,7 +10,7 @@ from app.services.rag_service import (
     need_retrieval,
 )
 from fastapi.responses import StreamingResponse
-
+from app.core.agent import get_agent
 
 router = APIRouter(prefix="/rag", tags=["RAG"])
 
@@ -71,4 +71,41 @@ def delete_file_api(file_name: str = Query(..., description="要删除的文件�
             "message": "删除成功",
         }
     except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/agent")
+async def agent_ask(request: QuestionRequest):
+    try:
+        agent = get_agent()
+        result = agent.invoke({"input": request.question})
+
+        print(f"🔍 完整 result: {result}")
+
+        steps = []
+        if "intermediate_steps" in result:
+            for step in result["intermediate_steps"]:
+                if len(step) == 2:
+                    action, observation = step
+                    steps.append(
+                        {
+                            "tool": action.tool
+                            if hasattr(action, "tool")
+                            else str(action),
+                            "tool_input": action.tool_input
+                            if hasattr(action, "tool_input")
+                            else "",
+                            "result": observation,
+                        }
+                    )
+
+        return {
+            "code": 0,
+            "message": "success",
+            "data": {"answer": result["output"], "steps": steps},
+        }
+    except Exception as e:
+        import traceback
+
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
