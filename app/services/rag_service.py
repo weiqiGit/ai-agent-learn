@@ -6,10 +6,12 @@ from app.core.rag_engine import (
     split_texts,
     get_vector_store,
     create_qa_chain,
-    delete_file_from_store,
-    get_files_list,
     stream_rag_answer,
     stream_answer,
+)
+from app.services.file_service import (
+    add_file_to_cache,
+    remove_file_from_cache,
 )
 from typing import AsyncIterator
 from app.services.constants import NO_RETRIEVAL_KEYWORDS
@@ -30,6 +32,7 @@ def upload(file):
 
     documents = load_document(file_path)
     chunks = split_texts(documents)
+    add_file_to_cache(file.filename, file_path, len(chunks))
     vectordb = get_vector_store(chunks)
     return {
         "filename": file.filename,
@@ -61,14 +64,8 @@ def ask_question(question: str):
 
 
 # 删除文件
-def delete_file(fileName: str) -> int:
-    return delete_file_from_store(fileName)
-
-
-# 获取文件列表
-def get_files():
-    files = get_files_list()
-    return {"files": files, "total": len(files)}
+def delete_file(fileName: str):
+    return remove_file_from_cache(fileName)
 
 
 # rag流式问答

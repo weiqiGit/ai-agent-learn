@@ -4,7 +4,6 @@ import requests
 from typing import AsyncIterator
 
 
-# 定义一个函数，参数是question是str类型，返回值是str类型
 def call_deepseek(question: str) -> str:
     API_URL = "https://api.deepseek.com/v1/chat/completions"
     API_KEY = os.getenv("DEEPSEEK_API_KEY")
@@ -52,5 +51,5 @@ async def stream_deepseek(question: str) -> AsyncIterator[str]:
             async for line in response.aiter_lines():
                 if line:
                     # 一旦 line 被 yield，如果前端消费慢，async for 会等待，协程会被挂起，不阻塞事件循环
-                    # tcp“背压”（Backpressure）机制 —— 前端消费慢时，后端会自动减速。
+                    # tcp“背压”（Backpressure）机制 —— 前端消费慢时，yield 被阻塞。
                     yield f"{line}\n\n"

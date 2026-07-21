@@ -1,11 +1,14 @@
 import os
-from langchain_community.chat_models import ChatOpenAI
+
+# from langchain_community.chat_models import ChatOpenAI
+from langchain_openai import ChatOpenAI
 from langchain.agents import create_tool_calling_agent, AgentExecutor
 from langchain.tools import Tool
 from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder
 from app.tools import knowledge_search, web_search, calculator
 from dotenv import load_dotenv
-# from pydantic import SecretStr
+from pydantic import SecretStr
+from langchain.memory import ConversationSummaryMemory
 
 load_dotenv()
 _agent_executor = None
@@ -19,9 +22,12 @@ def get_agent():
 
 
 def create_agent():
+    api_key = os.getenv("DEEPSEEK_API_KEY")
+    if not api_key:
+        raise ValueError("请设置环境变量 DEEPSEEK_API_KEY")
     llm = ChatOpenAI(
         model="deepseek-chat",
-        api_key=os.getenv("DEEPSEEK_API_KEY"),
+        api_key=SecretStr(api_key),
         base_url="https://api.deepseek.com/v1",
         temperature=0.3,
     )
@@ -64,15 +70,21 @@ def create_agent():
 请根据用户问题，选择合适的工具。
 """,
             ),
+            MessagesPlaceholder(variable_name="chat_history"),
             ("user", "{input}"),
+            # agent_scratchpad是多步推理的草稿纸
             MessagesPlaceholder(variable_name="agent_scratchpad"),
         ]
     )
-
+    # ConversationBufferMemory-基础记忆，ConversationBufferWindowMemory-窗口记忆，ConversationSummaryMemory摘要记忆
+    memory = ConversationSummaryMemory(
+        memory_key="chat_history", return_messages=True, llm=llm
+    )
     agent = create_tool_calling_agent(llm, tools, prompt)
     executor = AgentExecutor(
         agent=agent,
         tools=tools,
+        memory=memory,
         verbose=True,
         handle_parsing_errors=True,
         return_intermediate_steps=True,

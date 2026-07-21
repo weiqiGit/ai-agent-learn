@@ -19,7 +19,7 @@ from langchain.chains import RetrievalQA
 
 # 把文本转化成向量
 from langchain_community.embeddings import ZhipuAIEmbeddings
-from typing import List, AsyncIterator
+from typing import AsyncIterator
 from dotenv import load_dotenv
 
 
@@ -34,7 +34,7 @@ if not api_key:
 embeddings = ZhipuAIEmbeddings(model="embedding-2", api_key=api_key)
 
 
-# 根据文件格式，选择不同的加载器，把文件读成Document对象
+# 1、根据文件格式，选择不同的加载器，把文件读成Document对象
 def load_document(file_path: str):
     if file_path.endswith(".pdf"):
         documents = PyPDFLoader(file_path).load()
@@ -48,9 +48,9 @@ def load_document(file_path: str):
     return documents
 
 
-# 把文件切成小块，每块500字符，相邻两块重叠50个字符
+# 2、把文件切成小块，每块500字符，相邻两块重叠50个字符
 def split_texts(documents, chunk_size=500, chunk_overlap=50):
-    # 创建一个切片器实例
+    # 创建一个文本分割器实例
     splitter = RecursiveCharacterTextSplitter(
         chunk_size=chunk_size,
         chunk_overlap=chunk_overlap,
@@ -66,7 +66,7 @@ def split_texts(documents, chunk_size=500, chunk_overlap=50):
 _vectordb_cache = None
 
 
-# 获取会话级向量库+添加数据
+# 3、获取向量库+添加数据
 def get_vector_store(chunks=None):
     global _vectordb_cache
     if _vectordb_cache is not None:
@@ -86,44 +86,11 @@ def get_vector_store(chunks=None):
     return _vectordb_cache
 
 
-# 获取知识库所有已上传的文件及块数
-def get_files_list() -> List[dict]:
-    try:
-        vectordb = get_vector_store()
-        # 包含ids,documents,metadatas
-        all_docs = vectordb.get()
-        # 获取所有文档的 metadata，包含source
-        metadatas = all_docs.get("metadatas", [])
-
-        # 按 source 分组统计
-        file_map = {}
-        for meta in metadatas:
-            source = meta.get("source", "")
-            if source:
-                # 只取文件名，不要路径
-                file_name = os.path.basename(source)
-                if file_name not in file_map:
-                    file_map[file_name] = {
-                        "name": file_name,
-                        "source": source,
-                        "chunks": 0,
-                    }
-                file_map[file_name]["chunks"] += 1
-
-        return list(file_map.values())
-    except Exception as e:
-        print(f"获取文件列表失败: {e}")
-        return []
-
-
 # 删除指定文件的所有块
 def delete_file_from_store(file_name: str) -> int:
     try:
         vectordb = get_vector_store()
         # 获取该文件的所有 chunk IDs
-        # 注意：Chroma 的 where 条件匹配 metadata 中的 source 字段
-        # 但 source 存的是完整路径，所以需要构造 where 条件
-        # 方法：先获取所有文档，再过滤
         all_docs = vectordb.get()
         ids = all_docs.get("ids", [])
         metadatas = all_docs.get("metadatas", [])
@@ -147,7 +114,7 @@ def delete_file_from_store(file_name: str) -> int:
         return 0
 
 
-# 流式问答
+# 流式问答-不接入tools时用
 async def stream_chat(question: str, context: str) -> AsyncIterator[str]:
     try:
         if context:
@@ -177,7 +144,7 @@ async def stream_chat(question: str, context: str) -> AsyncIterator[str]:
         yield f"data: {json.dumps({'error': str(e)})}\n\n"
 
 
-# rag流式
+# rag流式-不接入tools时用
 async def stream_rag_answer(question: str) -> AsyncIterator[str]:
     try:
         vectordb = get_vector_store()

@@ -4,10 +4,12 @@ from app.models.schemas import QuestionRequest
 from app.services.rag_service import (
     upload,
     delete_file,
-    get_files,
     ask_question_rag,
     normal_chat_stream,
     need_retrieval,
+)
+from app.services.file_service import (
+    get_files_list,
 )
 from fastapi.responses import StreamingResponse
 from app.core.agent import get_agent
@@ -33,6 +35,7 @@ async def ask(
     request: QuestionRequest,
 ):
     try:
+        # need_retrieval通过关键词列表判断的
         if need_retrieval(request.question):
             return StreamingResponse(
                 ask_question_rag(request.question), media_type="text/event-stream"
@@ -54,7 +57,7 @@ async def ask(
 @router.get("/files")
 def get_list():
     try:
-        fileInfo = get_files()
+        fileInfo = get_files_list()
         return {"code": 0, "message": "success", "data": fileInfo}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -78,32 +81,39 @@ def delete_file_api(file_name: str = Query(..., description="要删除的文件�
 async def agent_ask(request: QuestionRequest):
     try:
         agent = get_agent()
-        result = agent.invoke({"input": request.question})
 
-        print(f"🔍 完整 result: {result}")
+        async def generate():
+            steps = []  # 存完整记录
 
-        steps = []
-        if "intermediate_steps" in result:
-            for step in result["intermediate_steps"]:
-                if len(step) == 2:
-                    action, observation = step
-                    steps.append(
-                        {
-                            "tool": action.tool
-                            if hasattr(action, "tool")
-                            else str(action),
-                            "tool_input": action.tool_input
-                            if hasattr(action, "tool_input")
-                            else "",
-                            "result": observation,
-                        }
-                    )
+            async for chunk in agent.astream({"input": request.question}):
+                # 1. 实时推送工具调用
+                if "steps" in chunk:
+                    for step in chunk["steps"]:
+                        action = step.action
+                        observation = step.observation
 
-        return {
-            "code": 0,
-            "message": "success",
-            "data": {"answer": result["output"], "steps": steps},
-        }
+                        tool_name = action.tool
+                        tool_input = action.tool_input
+                        steps.append(
+                            {
+                                "tool": tool_name,
+                                "tool_input": tool_input,
+                                "result": str(observation),
+                            }
+                        )
+
+                        # 👇 实时推给前端
+                        yield f"data: {json.dumps({'type': 'step', 'tool': tool_name, 'result': observation})}\n\n"
+
+                # 2. 流式推送答案
+                if "output" in chunk and chunk["output"]:
+                    yield f"data: {json.dumps({'type': 'answer', 'content': chunk['output']})}\n\n"
+
+            # 3. 最后发送完成信号（带完整步骤列表）
+            yield f"data: {json.dumps({'type': 'done', 'steps': steps})}\n\n"
+
+        return StreamingResponse(generate(), media_type="text/event-stream")
+
     except Exception as e:
         import traceback
 
