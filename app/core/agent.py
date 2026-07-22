@@ -2,26 +2,29 @@ import os
 
 # from langchain_community.chat_models import ChatOpenAI
 from langchain_openai import ChatOpenAI
-from langchain.agents import create_tool_calling_agent, AgentExecutor
 from langchain.tools import Tool
 from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder
 from app.tools import knowledge_search, web_search, calculator
 from dotenv import load_dotenv
 from pydantic import SecretStr
-from langchain.memory import ConversationSummaryMemory
+from langgraph.prebuilt import create_react_agent
+from langgraph.checkpoint.memory import InMemorySaver
+from app.memory.user_profile import UserProfileMemory
 
 load_dotenv()
 _agent_executor = None
+_checkpointer = InMemorySaver()
+_profile_memory = UserProfileMemory()
 
 
-def get_agent():
+def get_agent(user_id: str = "default"):
     global _agent_executor
     if _agent_executor is None:
-        _agent_executor = create_agent()
+        _agent_executor = create_agent(user_id)
     return _agent_executor
 
 
-def create_agent():
+def create_agent(user_id: str):
     api_key = os.getenv("DEEPSEEK_API_KEY")
     if not api_key:
         raise ValueError("请设置环境变量 DEEPSEEK_API_KEY")
@@ -49,45 +52,38 @@ def create_agent():
             description="执行数学计算，如加减乘除、百分比等。当用户需要计算时使用。",
         ),
     ]
-
+    # ✅ 获取用户画像，注入 System Prompt
+    user_context = _profile_memory.get_context_prompt(user_id)
     prompt = ChatPromptTemplate.from_messages(
         [
             (
                 "system",
-                """你是一个智能助手。当用户提出问题时，**必须**考虑是否需要使用工具。
+                f"""你是一个智能助手。当用户提出问题时，**必须**考虑是否需要使用工具。
+                {user_context if user_context else "暂无用户信息，请通过对话了解用户。"}
+                1. 用户没有明确询问公司信息时，不要主动提及公司
+                2. 只回答用户直接问的问题，不要过度延伸
+                3. 记住用户说的个人信息，但不要自己发挥
+                工具列表：
+                1. knowledge_search：查询公司内部文档
+                2. web_search：搜索互联网
+                3. calculator：执行数学计算（加减乘除等）
 
-工具列表：
-1. knowledge_search：查询公司内部文档
-2. web_search：搜索互联网
-3. calculator：执行数学计算（加减乘除等）
+                **重要规则：**
+                - 用户问数学计算时，**必须**使用 calculator 工具，不要自己计算
+                - 用户问公司内部问题，使用 knowledge_search
+                - 用户问外部信息，使用 web_search
+                - 问候类问题可以不使用工具直接回答
 
-**重要规则：**
-- 用户问数学计算时，**必须**使用 calculator 工具，不要自己计算
-- 用户问公司内部问题，使用 knowledge_search
-- 用户问外部信息，使用 web_search
-- 问候类问题可以不使用工具直接回答
-
-请根据用户问题，选择合适的工具。
-""",
+                请根据用户问题，选择合适的工具。
+                """,
             ),
-            MessagesPlaceholder(variable_name="chat_history"),
-            ("user", "{input}"),
-            # agent_scratchpad是多步推理的草稿纸
-            MessagesPlaceholder(variable_name="agent_scratchpad"),
+            MessagesPlaceholder(variable_name="messages"),
         ]
     )
-    # ConversationBufferMemory-基础记忆，ConversationBufferWindowMemory-窗口记忆，ConversationSummaryMemory摘要记忆
-    memory = ConversationSummaryMemory(
-        memory_key="chat_history", return_messages=True, llm=llm
-    )
-    agent = create_tool_calling_agent(llm, tools, prompt)
-    executor = AgentExecutor(
-        agent=agent,
+    agent = create_react_agent(
+        model=llm,
         tools=tools,
-        memory=memory,
-        verbose=True,
-        handle_parsing_errors=True,
-        return_intermediate_steps=True,
-        max_iterations=5,
+        prompt=prompt,
+        checkpointer=_checkpointer,
     )
-    return executor
+    return agent
