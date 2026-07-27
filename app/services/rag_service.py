@@ -15,6 +15,9 @@ from app.services.file_service import (
 )
 from typing import AsyncIterator
 from app.services.constants import NO_RETRIEVAL_KEYWORDS
+from app.memory.extractor import UserInfoExtractor
+from app.core.agent import _profile_memory
+
 
 UPLOAD_DIR = "./uploads"
 
@@ -92,3 +95,20 @@ def need_retrieval(question: str) -> bool:
         if kw in q_lower:
             return False
     return True
+
+
+_extractor = UserInfoExtractor()
+
+
+async def async_extract_and_update(user_id: str, messages: list):
+    """后台异步执行：提取用户信息并更新画像"""
+    print(f"🔍 async_extract_and_update 被调用, 消息数: {len(messages)}")  # ← 加这行
+    try:
+        extracted = _extractor.extract(messages)
+        print(f"🔍 LLM 提取结果: {extracted}")
+        if extracted.get("has_new_info", False):
+            print(f"✅ 用户画像还未更新: {extracted}")
+            _profile_memory.merge(user_id, extracted)
+            print(f"✅ 用户画像已更新: {extracted}")
+    except Exception as e:
+        print(f"❌ 提取用户信息失败: {e}")

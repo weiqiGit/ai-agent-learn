@@ -7,21 +7,22 @@ from app.services.rag_service import (
     ask_question_rag,
     normal_chat_stream,
     need_retrieval,
+    async_extract_and_update,
 )
 from app.services.file_service import (
     get_files_list,
 )
 from fastapi.responses import StreamingResponse
 from langchain_core.runnables import RunnableConfig
-from app.core.agent import get_agent, _profile_memory
-from app.memory.extractor import UserInfoExtractor
+from app.core.agent import get_agent
+
 from app.memory.user_profile import has_potential_info
 from app.memory.vector_memory import VectorMemory
 from fastapi import BackgroundTasks
 
 router = APIRouter(prefix="/rag", tags=["RAG"])
 
-_extractor = UserInfoExtractor()
+
 _vector_memory = VectorMemory()
 
 
@@ -97,20 +98,6 @@ async def agent_ask_stream(
     """
 
     async def generate():
-        async def async_extract_and_update(user_id: str, messages: list):
-            """后台异步执行：提取用户信息并更新画像"""
-            print(
-                f"🔍 async_extract_and_update 被调用, 消息数: {len(messages)}"
-            )  # ← 加这行
-            try:
-                extracted = _extractor.extract(messages)
-                print(f"🔍 LLM 提取结果: {extracted}")
-                if extracted.get("has_new_info", False):
-                    print(f"✅ 用户画像还未更新: {extracted}")
-                    _profile_memory.merge(user_id, extracted)
-                    print(f"✅ 用户画像已更新: {extracted}")
-            except Exception as e:
-                print(f"❌ 提取用户信息失败: {e}")
 
         try:
             # ✅ 从请求中获取 user_id（暂时用默认值，后续可以从登录态获取）

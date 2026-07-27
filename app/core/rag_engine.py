@@ -148,7 +148,7 @@ async def stream_chat(question: str, context: str) -> AsyncIterator[str]:
 async def stream_rag_answer(question: str) -> AsyncIterator[str]:
     try:
         vectordb = get_vector_store()
-        # 把向量库包装成 LangChain 检索器，需要返回4个最相似的文档块
+        # 把向量库包装成 LangChain 检索器，需要返回3个最相似的文档块
         retriever = vectordb.as_retriever(search_kwargs={"k": 3})
         # 组件运行，docs的类型是List[Document]，有page_content和page_meta
         docs = retriever.invoke(question)
