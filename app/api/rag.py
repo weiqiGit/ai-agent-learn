@@ -15,7 +15,6 @@ from fastapi.responses import StreamingResponse
 from langchain_core.runnables import RunnableConfig
 from app.core.agent import get_agent, _profile_memory
 from app.memory.extractor import UserInfoExtractor
-import asyncio
 from app.memory.user_profile import has_potential_info
 from app.memory.vector_memory import VectorMemory
 from fastapi import BackgroundTasks
