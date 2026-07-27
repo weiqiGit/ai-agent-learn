@@ -2,22 +2,13 @@ import json
 import os
 from typing import Dict, Any
 from datetime import datetime
+import re
 
 
 def has_potential_info(content: str) -> bool:
     """快速判断单条消息是否可能包含用户信息"""
-    keywords = [
-        "我叫",
-        "我是",
-        "我是一名",
-        "我喜欢",
-        "我讨厌",
-        "我的",
-        "我今年",
-        "我不喜欢",
-    ]
-    print(f"写时提取已触发:: {content}")
-    return any(kw in content for kw in keywords)
+    pattern = r"我(叫|是|是一名|喜欢|讨厌|爱|打算|计划|最近|经常|在学|在做|想).{2,20}"
+    return re.search(pattern, content) is not None
 
 
 class UserProfileMemory:
@@ -26,14 +17,19 @@ class UserProfileMemory:
     def __init__(self, storage_dir: str = "./user_profiles"):
         self.storage_dir = storage_dir
         os.makedirs(storage_dir, exist_ok=True)
+        print("⚠️ 文件不存在啦啦啦")  # 👈 加这行
 
     def _get_file_path(self, user_id: str) -> str:
         return os.path.join(self.storage_dir, f"{user_id}.json")
 
     def get(self, user_id: str) -> Dict[str, Any]:
         file_path = self._get_file_path(user_id)
+
+        print(f"📂 尝试读取: {file_path}")  # 👈 加这行看路径
         if not os.path.exists(file_path):
+            print("⚠️ 文件不存在，返回空字典")  # 👈 加这行
             return {}
+        print("✅ 文件存在，尝试解析 JSON")  # 👈 加这行
         with open(file_path, "r", encoding="utf-8") as f:
             return json.load(f)
 
@@ -42,13 +38,18 @@ class UserProfileMemory:
         增量合并新信息到用户画像
         返回：是否有实际更新
         """
+        print(f"🔍 merge 被调用, user_id: {user_id}, new_info: {new_info}")  # ← 加这行
         profile = self.get(user_id)
+        print(f"profile:{profile}")  # ← 加这行
         updated = False
 
         # 合并 name
         if "name" in new_info and new_info["name"]:
             if profile.get("name") != new_info["name"]:
                 profile["name"] = new_info["name"]
+                # ✅ 清空 preferences
+                if "preferences" in profile:
+                    profile["preferences"] = []
                 updated = True
 
         # 合并 preferences

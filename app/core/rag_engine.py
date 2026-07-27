@@ -9,7 +9,7 @@ from langchain_community.document_loaders import PyPDFLoader, TextLoader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 
 # 向量数据库，存向量，查相似
-from langchain_community.vectorstores import Chroma
+from langchain_chroma import Chroma
 
 # 用 DeepSeek 生成回答
 from langchain_community.chat_models import ChatOpenAI

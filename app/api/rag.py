@@ -17,10 +17,13 @@ from app.core.agent import get_agent, _profile_memory
 from app.memory.extractor import UserInfoExtractor
 import asyncio
 from app.memory.user_profile import has_potential_info
+from app.memory.vector_memory import VectorMemory
+from fastapi import BackgroundTasks
 
 router = APIRouter(prefix="/rag", tags=["RAG"])
 
 _extractor = UserInfoExtractor()
+_vector_memory = VectorMemory()
 
 
 # 上传文档 ，同一 session_id 上传多个文件，向量会累加
@@ -84,7 +87,10 @@ def delete_file_api(file_name: str = Query(..., description="要删除的文件�
 
 
 @router.post("/agent")
-async def agent_ask_stream(request: QuestionRequest):
+async def agent_ask_stream(
+    request: QuestionRequest,
+    background_tasks: BackgroundTasks,  # 👈 注入
+):
     """
     Agent 流式问答
     - 实时输出 Agent 的思考和工具调用过程
@@ -94,11 +100,14 @@ async def agent_ask_stream(request: QuestionRequest):
     async def generate():
         async def async_extract_and_update(user_id: str, messages: list):
             """后台异步执行：提取用户信息并更新画像"""
+            print(
+                f"🔍 async_extract_and_update 被调用, 消息数: {len(messages)}"
+            )  # ← 加这行
             try:
-                print("提取用户画像:: ")
                 extracted = _extractor.extract(messages)
                 print(f"🔍 LLM 提取结果: {extracted}")
                 if extracted.get("has_new_info", False):
+                    print(f"✅ 用户画像还未更新: {extracted}")
                     _profile_memory.merge(user_id, extracted)
                     print(f"✅ 用户画像已更新: {extracted}")
             except Exception as e:
@@ -107,7 +116,11 @@ async def agent_ask_stream(request: QuestionRequest):
         try:
             # ✅ 从请求中获取 user_id（暂时用默认值，后续可以从登录态获取）
             user_id = "user_001"
-            agent = get_agent(user_id)
+            # ✅ 用当前问题检索向量记忆
+            memory_context = _vector_memory.get_context_prompt(
+                user_id, request.question
+            )
+            agent = get_agent(user_id, memory_context)
 
             # 用 thread_id 区分会话，
             config = RunnableConfig(
@@ -147,20 +160,42 @@ async def agent_ask_stream(request: QuestionRequest):
             final_state = agent.get_state(config)
             if final_state and final_state.values:
                 messages = final_state.values.get("messages", [])
-                user_messages = [
-                    m for m in messages if hasattr(m, "type") and m.type == "human"
-                ]
+                if messages:
+                    # 只取用户消息
+                    user_messages = [
+                        m for m in messages if hasattr(m, "type") and m.type == "human"
+                    ]
+                    conversation_text = "\n".join(
+                        [
+                            f"{'用户' if hasattr(m, 'type') and m.type == 'human' else '助手'}：{getattr(m, 'content', '')}"
+                            for m in messages
+                        ]
+                    )
+                    if user_messages:
+                        # 获取最近1条用户消息
+                        recent_content = "\n".join(
+                            [getattr(m, "content", "") for m in user_messages[-1:]]
+                        )
 
-                if user_messages:
-                    last_user_msg = user_messages[-1]
+                        # ✅ 每轮都检查当前消息是否包含关键词
+                        print(f"🔍 检查消息: {recent_content[:50]}...")
+                        print(f"🔍 message长度: {len(messages)}")
+                        if has_potential_info(recent_content):
+                            print("🔍 规则命中")
 
-                    content = getattr(last_user_msg, "content", "")
-                    print(f"对话结束-最后一条消息：{content}---")
-                    if has_potential_info(content):
-                        print("最近一条消息中有用户信息")
-                        # ✅ 异步执行，不阻塞 done 的返回
-                        asyncio.create_task(async_extract_and_update(user_id, messages))
-            # 发送完成标记
+                            background_tasks.add_task(
+                                async_extract_and_update,
+                                user_id,
+                                messages.copy(),
+                            )
+                        else:
+                            print("⏭️ 规则未命中，跳过提取标签")
+
+                    background_tasks.add_task(
+                        _vector_memory.store,
+                        user_id,
+                        conversation_text,
+                    )
 
         except Exception as e:
             import traceback

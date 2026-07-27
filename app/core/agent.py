@@ -17,14 +17,14 @@ _checkpointer = InMemorySaver()
 _profile_memory = UserProfileMemory()
 
 
-def get_agent(user_id: str = "default"):
+def get_agent(user_id: str = "default", memory_context: str = ""):
     global _agent_executor
     if _agent_executor is None:
-        _agent_executor = create_agent(user_id)
+        _agent_executor = create_agent(user_id, memory_context)
     return _agent_executor
 
 
-def create_agent(user_id: str):
+def create_agent(user_id: str, memory_context: str = ""):
     api_key = os.getenv("DEEPSEEK_API_KEY")
     if not api_key:
         raise ValueError("请设置环境变量 DEEPSEEK_API_KEY")
@@ -52,14 +52,18 @@ def create_agent(user_id: str):
             description="执行数学计算，如加减乘除、百分比等。当用户需要计算时使用。",
         ),
     ]
-    # ✅ 获取用户画像，注入 System Prompt
+    # ✅ 获取结构化用户画像
     user_context = _profile_memory.get_context_prompt(user_id)
+
     prompt = ChatPromptTemplate.from_messages(
         [
             (
                 "system",
                 f"""你是一个智能助手。当用户提出问题时，**必须**考虑是否需要使用工具。
-                {user_context if user_context else "暂无用户信息，请通过对话了解用户。"}
+                【用户信息】
+{user_context if user_context else "暂无用户信息"}
+【用户记忆】
+{memory_context if memory_context else "暂无用户记忆"}
                 1. 用户没有明确询问公司信息时，不要主动提及公司
                 2. 只回答用户直接问的问题，不要过度延伸
                 3. 记住用户说的个人信息，但不要自己发挥
@@ -80,6 +84,7 @@ def create_agent(user_id: str):
             MessagesPlaceholder(variable_name="messages"),
         ]
     )
+
     agent = create_react_agent(
         model=llm,
         tools=tools,
