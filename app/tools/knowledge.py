@@ -1,16 +1,18 @@
 import os
 
+from langchain_core.tools import tool
+
 from app.core.rag_engine import get_vector_store
+from app.tools.schemas import KnowledgeSearchInput
 
 
+@tool(args_schema=KnowledgeSearchInput)
 def knowledge_search(query: str) -> str:
+    """查询公司内部文档、制度、流程、产品手册等。"""
     print(f"🔍 knowledge_search 开始执行，查询词: {query}")
     try:
-        if not query or len(query.strip()) < 2:
-            return "查询词太短，请提供更具体的关键词"
-
         vectordb = get_vector_store()
-        retriever = vectordb.as_retriever(search_kwargs={"k": 5})
+        retriever = vectordb.as_retriever(search_kwargs={"k": 3})
         docs = retriever.invoke(query)
 
         if not docs:

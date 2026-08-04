@@ -1,15 +1,17 @@
 import os
 
+from dotenv import load_dotenv
+from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder
+from langchain.tools import Tool
+
 # from langchain_community.chat_models import ChatOpenAI
 from langchain_openai import ChatOpenAI
-from langchain.tools import Tool
-from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder
-from app.tools import knowledge_search, web_search, calculator
-from dotenv import load_dotenv
-from pydantic import SecretStr
-from langgraph.prebuilt import create_react_agent
 from langgraph.checkpoint.memory import InMemorySaver
+from langgraph.prebuilt import create_react_agent
+from pydantic import SecretStr
+
 from app.memory.user_profile import UserProfileMemory
+from app.tools import calculator, knowledge_search, web_search
 
 load_dotenv()
 _agent_executor = None

@@ -1,13 +1,18 @@
 import os
 import time
 
+from langchain_core.tools import tool
 from tavily import TavilyClient
+
+from app.tools.schemas import WebSearchInput
 
 # 初始化客户端
 tavily = TavilyClient(api_key=os.getenv("TAVILY_API_KEY"))
 
 
+@tool(args_schema=WebSearchInput)
 def web_search(query: str) -> str:
+    """搜索互联网上的最新信息、新闻、实时数据。"""
     start = time.time()
     print(f"⏰ [{time.strftime('%H:%M:%S')}] web_search 开始: {query}")
     """使用百度搜索（国内直连）"""
