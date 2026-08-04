@@ -1,11 +1,15 @@
 import os
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+
 from app.api import chat, rag
+from app.core.exceptions import register_exception_handlers
 
 app = FastAPI(title="AI Agent 服务")
 
+register_exception_handlers(app)
 # CORS
 app.add_middleware(
     CORSMiddleware,

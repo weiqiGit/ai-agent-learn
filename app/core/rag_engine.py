@@ -68,53 +68,57 @@ _vectordb_cache = None
 
 # 3、获取向量库+添加数据
 def get_vector_store(chunks=None):
-    global _vectordb_cache
-    if _vectordb_cache is not None:
-        # 如果有新文档要添加，追加到缓存
+    """获取向量库，失败时返回 None"""
+    try:
+        global _vectordb_cache
+        if _vectordb_cache is not None:
+            # 如果有新文档要添加，追加到缓存
+            if chunks:
+                _vectordb_cache.add_documents(chunks)
+            return _vectordb_cache
+        # 获取全局向量库（不存在则自动创建）
+        # Chroma 会自动创建目录和空库
+        _vectordb_cache = Chroma(
+            persist_directory=PERSIST_DIR,
+            embedding_function=embeddings,
+        )
+        # 有新文档就追加
         if chunks:
             _vectordb_cache.add_documents(chunks)
         return _vectordb_cache
-    # 获取全局向量库（不存在则自动创建）
-    # Chroma 会自动创建目录和空库
-    _vectordb_cache = Chroma(
-        persist_directory=PERSIST_DIR,
-        embedding_function=embeddings,
-    )
-    # 有新文档就追加
-    if chunks:
-        _vectordb_cache.add_documents(chunks)
-    return _vectordb_cache
+    except ValueError:
+        if chunks is None:
+            raise ValueError("需要提供 chunks 来创建新的向量库")
+        return Chroma.from_documents(
+            documents=chunks, embedding=embeddings, persist_directory=PERSIST_DIR
+        )
 
 
 # 删除指定文件的所有块
 def delete_file_from_store(file_name: str) -> int:
-    try:
-        vectordb = get_vector_store()
-        # 获取该文件的所有 chunk IDs
-        all_docs = vectordb.get()
-        ids = all_docs.get("ids", [])
-        metadatas = all_docs.get("metadatas", [])
+    vectordb = get_vector_store()
+    # 获取该文件的所有 chunk IDs
+    all_docs = vectordb.get()
+    ids = all_docs.get("ids", [])
+    metadatas = all_docs.get("metadatas", [])
 
-        # 找出匹配的文件名对应的 ids
-        ids_to_delete = []
-        # 配对遍历
-        for doc_id, meta in zip(ids, metadatas):
-            source = meta.get("source", "")
-            if source and os.path.basename(source) == file_name:
-                ids_to_delete.append(doc_id)
+    # 找出匹配的文件名对应的 ids
+    ids_to_delete = []
+    # 配对遍历
+    for doc_id, meta in zip(ids, metadatas):
+        source = meta.get("source", "")
+        if source and os.path.basename(source) == file_name:
+            ids_to_delete.append(doc_id)
 
-        if not ids_to_delete:
-            return 0
-
-        # 删除这些块
-        vectordb._collection.delete(ids=ids_to_delete)
-        return len(ids_to_delete)
-    except Exception as e:
-        print(f"删除文件 {file_name} 失败: {e}")
+    if not ids_to_delete:
         return 0
 
+    # 删除这些块
+    vectordb._collection.delete(ids=ids_to_delete)
+    return len(ids_to_delete)
 
-# 流式问答-不接入tools时用
+
+# 已弃用-流式问答-不接入tools时用
 async def stream_chat(question: str, context: str) -> AsyncIterator[str]:
     try:
         if context:
@@ -144,23 +148,18 @@ async def stream_chat(question: str, context: str) -> AsyncIterator[str]:
         yield f"data: {json.dumps({'error': str(e)})}\n\n"
 
 
-# rag流式-不接入tools时用
+# 已弃用-rag流式-不接入tools时用
 async def stream_rag_answer(question: str) -> AsyncIterator[str]:
     try:
         vectordb = get_vector_store()
         # 把向量库包装成 LangChain 检索器，需要返回3个最相似的文档块
-        retriever = vectordb.as_retriever(search_kwargs={"k": 3})
+        retriever = vectordb.as_retriever(search_kwargs={"k": 5})
         # 组件运行，docs的类型是List[Document]，有page_content和page_meta
         docs = retriever.invoke(question)
 
         # 提取来源：——遍历docs，取出source中的文件名，并用set转成集合去重，再用list转成列表
         sources = list(
-            set(
-                [
-                    os.path.basename(doc.metadata.get("source", "未知来源"))
-                    for doc in docs
-                ]
-            )
+            {os.path.basename(doc.metadata.get("source", "未知来源")) for doc in docs}
         )
         context = "\n\n".join([doc.page_content for doc in docs])
         # 异步流式调用 LLM，每次返回一个字符块,异步迭代，每收到一个字符块就执行一次循环
@@ -173,7 +172,7 @@ async def stream_rag_answer(question: str) -> AsyncIterator[str]:
         yield f"data: {json.dumps({'error': str(e)})}\n\n"
 
 
-# 普通流式
+# 已弃用-普通流式
 async def stream_answer(question: str) -> AsyncIterator[str]:
     try:
         async for chunk in stream_chat(question, ""):
@@ -197,7 +196,7 @@ def create_qa_chain(vectordb):
         temperature=0.3,
     )
     # 创建检索器，表示每次检索返回最相似的 3 个文档块
-    retriever = vectordb.as_retriever(search_kwargs={"k": 3})
+    retriever = vectordb.as_retriever(search_kwargs={"k": 5})
     # 用 LangChain 创建一个 RAG 问答链
     return RetrievalQA.from_chain_type(
         llm=llm,

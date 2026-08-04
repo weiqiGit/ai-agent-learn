@@ -1,25 +1,25 @@
+import json
 import os
+from datetime import datetime
 from typing import List, Optional
-from langchain_huggingface import HuggingFaceEmbeddings
+
 from langchain_chroma import Chroma
 from langchain_community.chat_models import ChatOpenAI
+from langchain_community.embeddings import ZhipuAIEmbeddings
 from langchain_core.messages import HumanMessage, SystemMessage
-import json
-from datetime import datetime
 
 
 class VectorMemory:
     """自由文本 + 向量检索 的长期记忆（模糊信息）"""
 
+    # ✅ 用智谱替代 HuggingFace
     def __init__(self, persist_dir: str = "./user_memory_db"):
         self.persist_dir = persist_dir
         os.makedirs(persist_dir, exist_ok=True)
-
-        self.embeddings = HuggingFaceEmbeddings(
-            model_name="sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
-            model_kwargs={"device": "cpu"},
-            encode_kwargs={"normalize_embeddings": True},
-        )
+        api_key = os.getenv("ZHIPUAI_API_KEY")
+        if not api_key:
+            raise ValueError("请设置环境变量 ZHIPUAI_API_KEY")
+        self.embeddings = ZhipuAIEmbeddings(model="embedding-2", api_key=api_key)
         self.llm = ChatOpenAI(
             model="deepseek-chat",
             api_key=os.getenv("DEEPSEEK_API_KEY"),

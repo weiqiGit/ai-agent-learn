@@ -1,24 +1,28 @@
 import json
-from fastapi import APIRouter, UploadFile, File, HTTPException, Query
+import re
+import time
+
+from fastapi import APIRouter, BackgroundTasks, File, HTTPException, Query, UploadFile
+from fastapi.responses import StreamingResponse
+from langchain_core.runnables import RunnableConfig
+
+from app.core.agent import get_agent
+from app.core.exceptions import AppException
+from app.memory.user_profile import has_potential_info
+from app.memory.vector_memory import VectorMemory
 from app.models.schemas import QuestionRequest
-from app.services.rag_service import (
-    upload,
-    delete_file,
-    ask_question_rag,
-    normal_chat_stream,
-    need_retrieval,
-    async_extract_and_update,
-)
 from app.services.file_service import (
     get_files_list,
 )
-from fastapi.responses import StreamingResponse
-from langchain_core.runnables import RunnableConfig
-from app.core.agent import get_agent
-
-from app.memory.user_profile import has_potential_info
-from app.memory.vector_memory import VectorMemory
-from fastapi import BackgroundTasks
+from app.services.rag_service import (
+    ask_question_rag,
+    async_extract_and_update,
+    delete_file,
+    need_retrieval,
+    normal_chat_stream,
+    upload,
+)
+from app.utils.logger import logger
 
 router = APIRouter(prefix="/rag", tags=["RAG"])
 
@@ -31,11 +35,17 @@ _vector_memory = VectorMemory()
 async def upload_file(
     file: UploadFile = File(...),
 ):
-    try:
-        upload(file)
-        return {"code": 0, "message": "文件上传成功，已建立索引，可以开始提问"}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    if not file.filename:
+        raise AppException(code=400, message="文件名不能为空", status_code=400)
+    allowed_extensions = [".pdf", ".txt"]
+    if not any(file.filename.endswith(ext) for ext in allowed_extensions):
+        raise AppException(
+            code=400,
+            message=f"不支持的文件格式，支持: {', '.join(allowed_extensions)}",
+            status_code=400,
+        )
+    upload(file)
+    return {"code": 0, "message": "文件上传成功，已建立索引，可以开始提问"}
 
 
 # 问答
@@ -75,15 +85,15 @@ def get_list():
 # 删除文件
 @router.delete("/deleteFile")
 def delete_file_api(file_name: str = Query(..., description="要删除的文件名")):
-    try:
-        print(f"要删除的文件：  {file_name}")
-        delete_file(file_name)
-        return {
-            "code": 0,
-            "message": "删除成功",
-        }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    if not file_name or not file_name.strip():
+        raise AppException(code=400, message="文件名不能为空", status_code=400)
+
+    print(f"要删除的文件：  {file_name}")
+    delete_file(file_name)
+    return {
+        "code": 0,
+        "message": "删除成功",
+    }
 
 
 @router.post("/agent")
@@ -98,35 +108,67 @@ async def agent_ask_stream(
     """
 
     async def generate():
-
+        # ✅ 从请求中获取 user_id（暂时用默认值，后续可以从登录态获取）
+        user_id = "user_001"
+        start_time = time.time()
+        print(f"⏰ [{time.strftime('%H:%M:%S')}] 请求开始")
+        tool_calls = []
+        # 记录请求开始
+        logger.log(
+            "request",
+            {
+                "user_id": user_id,
+                "question": request.question,
+                "status": "started",
+                "desc": f"/agent接口请求开始，用户 {user_id} 开始提问",
+            },
+        )
         try:
-            # ✅ 从请求中获取 user_id（暂时用默认值，后续可以从登录态获取）
-            user_id = "user_001"
             # ✅ 用当前问题检索向量记忆
             memory_context = _vector_memory.get_context_prompt(
                 user_id, request.question
             )
             agent = get_agent(user_id, memory_context)
-
+            print(
+                f"⏰ [{time.strftime('%H:%M:%S')}] Agent 已获取，耗时 {time.time() - start_time:.2f}s"
+            )
             # 用 thread_id 区分会话，
             config = RunnableConfig(
-                {"configurable": {"thread_id": f"{user_id}_session_002"}}
+                {
+                    "configurable": {"thread_id": f"{user_id}_session_001"},
+                    # 控制最大步数
+                    "recursion_limit": 6,
+                }
             )
-
+            sources = []
             # ✅ 使用 astream 流式执行
             async for chunk in agent.astream(
                 {"messages": [("user", request.question)]},
                 config=config,
                 stream_mode="values",  # 每次状态变化都输出（用户消息、工具调用、AI 回复等）
             ):
+                print(
+                    f"⏰ [{time.strftime('%H:%M:%S')}] 收到 chunk，已耗时 {time.time() - start_time:.2f}s"
+                )
+
                 # 提取当前状态中的所有消息-累加的
                 messages = chunk.get("messages", [])
                 if messages:
                     last_msg = messages[-1]
+                    if hasattr(last_msg, "type") and last_msg.type == "tool":
+                        content = last_msg.content
+                        # ✅ 用正则提取 "📎 来源：xxx"
+
+                        match = re.search(r"📎 来源：([^\n]+)", content)
+                        if match:
+                            sources = [s.strip() for s in match.group(1).split("、")]
 
                     # 判断消息类型
                     # ✅ 只输出 AI 的回答（AIMessage），跳过用户输入和工具消息
                     if hasattr(last_msg, "type"):
+                        print(
+                            f"{hasattr(last_msg, 'type')}············{hasattr(last_msg, 'content')}+++++++++{last_msg.content}"
+                        )
                         if (
                             last_msg.type == "ai"
                             and hasattr(last_msg, "content")
@@ -137,16 +179,50 @@ async def agent_ask_stream(
                     # 工具调用信息保留（调试用）
                     if hasattr(last_msg, "tool_calls") and last_msg.tool_calls:
                         for tc in last_msg.tool_calls:
+                            tool_name = tc.get("name", "unknown")
+                            tool_calls.append(tool_name)
+                            # 记录工具调用
+                            logger.log(
+                                "tool",
+                                {
+                                    "user_id": user_id,
+                                    "tool": tool_name,
+                                    "args": tc.get("args", {}),
+                                    "desc": f"调用 「{tool_name}」工具",
+                                },
+                            )
                             yield f"data: {json.dumps({'type': 'tool_call', 'tool': tc['name'], 'args': tc['args']})}\n\n"
-            yield f"data: {json.dumps({'type': 'done'})}\n\n"
-
+            print(
+                f"⏰ [{time.strftime('%H:%M:%S')}] 流式完成，总耗时 {time.time() - start_time:.2f}s"
+            )
+            if sources:
+                print(f"✅ 发送 sources: {sources}")
+                yield f"data: {json.dumps({'type': 'sources', 'sources': sources})}\n\n"
+            yield f"data: {json.dumps({'done': True})}\n\n"
+            # ✅ 记录请求完成
+            elapsed = time.time() - start_time
+            logger.log(
+                "request",
+                {
+                    "user_id": user_id,
+                    "question": request.question,
+                    "tool_calls": tool_calls,
+                    "latency": round(elapsed, 3),
+                    "status": "completed",
+                    "desc": f"/agent接口请求结束：用户 {user_id} 提问完成，耗时 {round(elapsed, 3)}s",
+                },
+            )
             # ✅ 生产级：提取用户信息（不阻塞流式输出）
             # 对话结束后，检查是否需要更新用户画像
             print("对话结束-done")
             final_state = agent.get_state(config)
             if final_state and final_state.values:
+                print(f"🔍 final_state.values 的 keys: {final_state.values.keys()}")
+                print(f"🔍 final_state.values 完整内容: {final_state.values}")
+
                 messages = final_state.values.get("messages", [])
                 if messages:
+                    last_msg = messages[-1]
                     # 只取用户消息
                     user_messages = [
                         m for m in messages if hasattr(m, "type") and m.type == "human"
@@ -187,6 +263,18 @@ async def agent_ask_stream(
             import traceback
 
             traceback.print_exc()
+            #  记录错误
+            logger.log(
+                "error",
+                {
+                    "user_id": user_id,
+                    "question": request.question,
+                    "error": str(e),
+                    # 完整错误堆栈，可能暴露代码路径和内部逻辑，通常记录在服务端日志里，不返回给前端
+                    "traceback": traceback.format_exc(),
+                    "desc": f"用户 {user_id} 请求失败",
+                },
+            )
             yield f"data: {json.dumps({'type': 'error', 'error': str(e)})}\n\n"
 
     return StreamingResponse(generate(), media_type="text/event-stream")

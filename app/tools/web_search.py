@@ -1,52 +1,47 @@
-# app/tools/search.py
-import httpx
-from bs4 import BeautifulSoup
-from urllib.parse import quote
+import os
+import time
+
+from tavily import TavilyClient
+
+# 初始化客户端
+tavily = TavilyClient(api_key=os.getenv("TAVILY_API_KEY"))
 
 
 def web_search(query: str) -> str:
+    start = time.time()
+    print(f"⏰ [{time.strftime('%H:%M:%S')}] web_search 开始: {query}")
     """使用百度搜索（国内直连）"""
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    }
-
-    url = f"https://www.baidu.com/s?wd={quote(query)}"
-
     try:
-        response = httpx.get(url, headers=headers, timeout=10.0, follow_redirects=True)
-        response.raise_for_status()
+        if not query or len(query.strip()) < 2:
+            return "搜索词太短，请提供更具体的关键词"
+        if not any(word in query for word in ["中文", "中国", "国内"]):
+            query = f"{query} 中文"
 
-        soup = BeautifulSoup(response.text, "html.parser")
-        results = []
+        response = tavily.search(
+            query=query,
+            search_depth="basic",  # basic 或 advanced
+            max_results=2,
+            include_answer=True,
+        )
 
-        for item in soup.select(".result, .c-container"):
-            title_elem = item.select_one("h3 a")
-            if not title_elem:
-                continue
+        # 如果有 AI 总结的答案，优先展示
+        if response.get("answer"):
+            return f"🔍 搜索结果（AI 总结）：\n{response['answer']}"
 
-            title = title_elem.get_text(strip=True)
-            link = title_elem.get("href", "")
-
-            snippet_elem = item.select_one(".c-abstract")
-            snippet = snippet_elem.get_text(strip=True) if snippet_elem else "无摘要"
-
-            results.append({"title": title, "snippet": snippet, "link": link})
-
-            if len(results) >= 5:
-                break
-
+        # 否则展示原始结果
+        results = response.get("results", [])
+        elapsed = time.time() - start
+        print(f"⏰ [{time.strftime('%H:%M:%S')}] web_search 完成，耗时 {elapsed:.2f}s")
         if not results:
             return f"未找到 '{query}' 的相关结果"
 
-        output = f"🔍 百度搜索 '{query}' 的结果：\n\n"
+        output = f"🔍 搜索 '{query}' 的结果：\n\n"
         for i, item in enumerate(results[:5], 1):
-            output += (
-                f"{i}. {item['title']}\n   {item['snippet']}\n   🔗 {item['link']}\n\n"
-            )
+            output += f"{i}. {item.get('title', '无标题')}\n"
+            output += f"   {item.get('content', '无内容')[:200]}...\n"
+            output += f"   🔗 {item.get('url', '')}\n\n"
 
         return output
 
-    except httpx.TimeoutException:
-        return "⏰ 搜索超时，请稍后重试"
     except Exception as e:
         return f"搜索失败：{str(e)}"

@@ -1,22 +1,28 @@
 import json
 import os
+from typing import Any
+
 from langchain_community.chat_models import ChatOpenAI
 from langchain_core.messages import HumanMessage, SystemMessage
-from typing import Dict, Any
+
+from app.utils.logger import logger
 
 
 class UserInfoExtractor:
     """用 LLM 从对话中提取用户信息"""
 
     def __init__(self):
+        api_key = os.getenv("DEEPSEEK_API_KEY")
+        if not api_key:
+            raise ValueError("请设置环境变量 DEEPSEEK_API_KEY")
         self.llm = ChatOpenAI(
             model="deepseek-chat",
-            api_key=os.getenv("DEEPSEEK_API_KEY"),
+            api_key=api_key,
             base_url="https://api.deepseek.com/v1",
             temperature=0.1,
         )
 
-    def extract(self, messages: list) -> Dict[str, Any]:
+    def extract(self, messages: list) -> dict[str, Any]:
         """
         从对话中提取用户信息
         返回：{"name": "...", "preferences": [...], "has_new_info": bool}
@@ -24,9 +30,10 @@ class UserInfoExtractor:
 
         # 只取最近1条消息
         recent_messages = messages[-1:]
-        print(
-            f"🔍 extractor.extract 被调用, 消息数: {len(recent_messages)}"
-        )  # ← 加这行
+        logger.log(
+            "memory",
+            {"operation": "extract", "desc": f"extractor.extract 被调用, 消息数: {len(recent_messages)}"},
+        )
         system_prompt = """你是一个信息提取助手。从对话中提取用户的信息。
 
 提取规则：
@@ -45,22 +52,25 @@ class UserInfoExtractor:
         )
 
         content = str(response.content) if response.content else ""
-        print(f"🔍 LLM 原始返回长度: {len(content)}")
-        print(f"🔍 LLM 原始返回 (repr): {repr(content)}")  # ← 加这行
+        logger.log(
+            "memory",
+            {"operation": "extract", "desc": f"LLM 原始返回长度: {len(content)}"},
+        )
+        logger.log(
+            "memory",
+            {"operation": "extract", "desc": f"LLM 原始返回 (repr): {content!r}"},
+        )
 
-        # ✅ 尝试直接解析
         try:
             content = content.strip()
-            print(f"🔍 strip 后: {repr(content)}")
+            logger.log(
+                "memory",
+                {"operation": "extract", "desc": f"strip 后: {content!r}"},
+            )
             return json.loads(content)
-        except json.JSONDecodeError as e:
-            print(f"❌ 直接解析失败: {e}")
-            # 尝试去掉可能的 markdown 代码块
-            if content.startswith("```json"):
-                content = content.replace("```json", "").replace("```", "").strip()
-                try:
-                    return json.loads(content)
-                except json.JSONDecodeError as e:
-                    pass
-            # 如果还是失败，返回默认值
+        except (json.JSONDecodeError, ValueError) as e:
+            logger.log(
+                "error",
+                {"operation": "extract", "error": str(e), "desc": "用户信息提取失败"},
+            )
             return {"name": "", "preferences": [], "has_new_info": False}
