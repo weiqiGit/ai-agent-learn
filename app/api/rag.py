@@ -1,9 +1,9 @@
 import json
-import re
 import time
 
 from fastapi import APIRouter, BackgroundTasks, File, HTTPException, Query, UploadFile
 from fastapi.responses import StreamingResponse
+from langchain_core.messages import AIMessageChunk, ToolMessage
 from langchain_core.runnables import RunnableConfig
 
 from app.core.agent import get_agent
@@ -108,7 +108,7 @@ async def agent_ask_stream(
     """
 
     async def generate():
-        # ✅ 从请求中获取 user_id（暂时用默认值，后续可以从登录态获取）
+        #  从请求中获取 user_id（暂时用默认值，后续可以从登录态获取）
         user_id = "user_001"
         start_time = time.time()
         print(f"⏰ [{time.strftime('%H:%M:%S')}] 请求开始")
@@ -124,7 +124,7 @@ async def agent_ask_stream(
             },
         )
         try:
-            # ✅ 用当前问题检索向量记忆
+            #  用当前问题检索向量记忆
             memory_context = _vector_memory.get_context_prompt(
                 user_id, request.question
             )
@@ -141,65 +141,46 @@ async def agent_ask_stream(
                 }
             )
             sources = []
-            # ✅ 使用 astream 流式执行
-            async for chunk in agent.astream(
+            #  使用 astream 流式执行
+            async for event in agent.astream_events(
                 {"messages": [("user", request.question)]},
                 config=config,
-                stream_mode="values",  # 每次状态变化都输出（用户消息、工具调用、AI 回复等）
+                version="v1",
             ):
-                print(
-                    f"⏰ [{time.strftime('%H:%M:%S')}] 收到 chunk，已耗时 {time.time() - start_time:.2f}s"
-                )
+                kind = event["event"]
+                print(f"事件: {kind}")
 
-                # 提取当前状态中的所有消息-累加的
-                messages = chunk.get("messages", [])
-                if messages:
-                    last_msg = messages[-1]
-                    if hasattr(last_msg, "type") and last_msg.type == "tool":
-                        content = last_msg.content
-                        # ✅ 用正则提取 "📎 来源：xxx"
+                # LLM 生成 token
+                if kind == "on_chat_model_stream":
+                    chunk = event["data"].get("chunk")
+                    # 必须取 .content 字符串，不要序列化整个 AIMessageChunk 对象
+                    if chunk and chunk.content:
+                        text = chunk.content
+                        yield f"data: {json.dumps({'type': 'content', 'content': text}, ensure_ascii=False)}\n\n"
 
-                        match = re.search(r"📎 来源：([^\n]+)", content)
-                        if match:
-                            sources = [s.strip() for s in match.group(1).split("、")]
+                # 工具开始调用（参数是完整的）
+                elif kind == "on_tool_start":
+                    tool_name = event["name"]
+                    tool_input = event["data"].get("input", {})
+                    print(f"🔧 调用工具: {tool_name}, 参数: {tool_input}")
+                    tool_calls.append(tool_name)
+                    yield f"data: {json.dumps({'type': 'tool_call', 'tool': tool_name, 'args': tool_input})}\n\n"
 
-                    # 判断消息类型
-                    # ✅ 只输出 AI 的回答（AIMessage），跳过用户输入和工具消息
-                    if hasattr(last_msg, "type"):
-                        print(
-                            f"{hasattr(last_msg, 'type')}············{hasattr(last_msg, 'content')}+++++++++{last_msg.content}"
-                        )
-                        if (
-                            last_msg.type == "ai"
-                            and hasattr(last_msg, "content")
-                            and last_msg.content
-                        ):
-                            yield f"data: {json.dumps({'type': 'message', 'content': last_msg.content})}\n\n"
-
-                    # 工具调用信息保留（调试用）
-                    if hasattr(last_msg, "tool_calls") and last_msg.tool_calls:
-                        for tc in last_msg.tool_calls:
-                            tool_name = tc.get("name", "unknown")
-                            tool_calls.append(tool_name)
-                            # 记录工具调用
-                            logger.log(
-                                "tool",
-                                {
-                                    "user_id": user_id,
-                                    "tool": tool_name,
-                                    "args": tc.get("args", {}),
-                                    "desc": f"调用 「{tool_name}」工具",
-                                },
-                            )
-                            yield f"data: {json.dumps({'type': 'tool_call', 'tool': tc['name'], 'args': tc['args']})}\n\n"
-            print(
-                f"⏰ [{time.strftime('%H:%M:%S')}] 流式完成，总耗时 {time.time() - start_time:.2f}s"
-            )
-            if sources:
-                print(f"✅ 发送 sources: {sources}")
-                yield f"data: {json.dumps({'type': 'sources', 'sources': sources})}\n\n"
+                # 工具调用结束
+                elif kind == "on_tool_end":
+                    tool_msg = event["data"].get("output")
+                    if tool_msg and hasattr(tool_msg, "content"):
+                        tool_out = tool_msg.content
+                        try:
+                            data = json.loads(tool_out)
+                            sources = data.get("sources", [])
+                            # 推送来源给前端
+                            yield f"data: {json.dumps({'type': 'sources', 'sources': sources})}\n\n"
+                        except json.JSONDecodeError:
+                            # 兜底兼容旧格式
+                            pass
             yield f"data: {json.dumps({'done': True})}\n\n"
-            # ✅ 记录请求完成
+            #  记录请求完成
             elapsed = time.time() - start_time
             logger.log(
                 "request",
@@ -212,7 +193,7 @@ async def agent_ask_stream(
                     "desc": f"/agent接口请求结束：用户 {user_id} 提问完成，耗时 {round(elapsed, 3)}s",
                 },
             )
-            # ✅ 生产级：提取用户信息（不阻塞流式输出）
+            #  生产级：提取用户信息（不阻塞流式输出）
             # 对话结束后，检查是否需要更新用户画像
             print("对话结束-done")
             final_state = agent.get_state(config)
@@ -222,7 +203,6 @@ async def agent_ask_stream(
 
                 messages = final_state.values.get("messages", [])
                 if messages:
-                    last_msg = messages[-1]
                     # 只取用户消息
                     user_messages = [
                         m for m in messages if hasattr(m, "type") and m.type == "human"
