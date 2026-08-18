@@ -3,7 +3,7 @@ import os
 from datetime import datetime, timezone
 from typing import Any, Literal
 
-LOG_DIR = "./logs"
+LOG_DIR = os.getenv("LOG_DIR", "./logs")
 os.makedirs(LOG_DIR, exist_ok=True)
 JSON_LOG_FILE = os.path.join(LOG_DIR, "structured.log")
 

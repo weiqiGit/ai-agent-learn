@@ -1,5 +1,11 @@
-from .knowledge import knowledge_search
-from .web_search import web_search
 from .calculator import calculator
+from .knowledge import knowledge_search
+from .sql_placeholder import sql_placeholder
+from .web_search import web_search
 
-__all__ = ["knowledge_search", "web_search", "calculator"]
+__all__ = [
+    "calculator",
+    "knowledge_search",
+    "sql_placeholder",
+    "web_search",
+]

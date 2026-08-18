@@ -5,9 +5,23 @@ from langchain_core.tools import tool
 
 from app.core.rag_engine import get_vector_store
 from app.tools.schemas import KnowledgeSearchInput
+from app.utils.retry import retry
+
+
+def on_retry(name, attempt, error, delay):
+    print(f"⏳ {name} 重试 {attempt} 次，等待 {delay:.2f}s，错误: {error}")
 
 
 @tool(args_schema=KnowledgeSearchInput)
+@retry(
+    max_retries=2,
+    base_delay=0.5,
+    backoff=2.0,
+    max_delay=10.0,
+    jitter=0.2,
+    exceptions=(Exception,),  # Chroma 可能抛出各种异常
+    on_retry=on_retry,
+)
 def knowledge_search(query: str) -> str:
     """
     查询公司内部文档、制度、流程、产品手册等。

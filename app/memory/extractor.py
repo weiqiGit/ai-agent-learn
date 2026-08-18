@@ -2,8 +2,9 @@ import json
 import os
 from typing import Any
 
-from langchain_community.chat_models import ChatOpenAI
 from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_openai import ChatOpenAI
+from pydantic import SecretStr
 
 from app.utils.logger import logger
 
@@ -13,11 +14,12 @@ class UserInfoExtractor:
 
     def __init__(self):
         api_key = os.getenv("DEEPSEEK_API_KEY")
+
         if not api_key:
             raise ValueError("请设置环境变量 DEEPSEEK_API_KEY")
         self.llm = ChatOpenAI(
             model="deepseek-chat",
-            api_key=api_key,
+            api_key=SecretStr(api_key),
             base_url="https://api.deepseek.com/v1",
             temperature=0.1,
         )
@@ -32,7 +34,10 @@ class UserInfoExtractor:
         recent_messages = messages[-1:]
         logger.log(
             "memory",
-            {"operation": "extract", "desc": f"extractor.extract 被调用, 消息数: {len(recent_messages)}"},
+            {
+                "operation": "extract",
+                "desc": f"extractor.extract 被调用, 消息数: {len(recent_messages)}",
+            },
         )
         system_prompt = """你是一个信息提取助手。从对话中提取用户的信息。
 

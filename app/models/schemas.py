@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class ChatRequest(BaseModel):
@@ -21,3 +21,7 @@ class FileInfo(BaseModel):
     name: str
     chunks: int
     source: str
+
+
+class SQLPlaceholderInput(BaseModel):
+    sql: str = Field(description="要执行的 SQL 查询语句，只能是 SELECT 查询")

@@ -3,23 +3,26 @@ import time
 
 from fastapi import APIRouter, BackgroundTasks, File, HTTPException, Query, UploadFile
 from fastapi.responses import StreamingResponse
-from langchain_core.messages import AIMessageChunk, ToolMessage
+from langchain_core.messages import HumanMessage
 from langchain_core.runnables import RunnableConfig
+from langgraph.errors import GraphInterrupt
+from langgraph.graph import MessagesState
+from langgraph.types import Command
+from app.tools.schemas import ApprovalRequest
 
-from app.core.agent import get_agent
+
+from app.core.agent import agent_graph
 from app.core.exceptions import AppException
-from app.memory.user_profile import has_potential_info
 from app.memory.vector_memory import VectorMemory
 from app.models.schemas import QuestionRequest
 from app.services.file_service import (
     get_files_list,
 )
 from app.services.rag_service import (
-    ask_question_rag,
-    async_extract_and_update,
+    # ask_question_rag,
     delete_file,
-    need_retrieval,
-    normal_chat_stream,
+    # need_retrieval,
+    # normal_chat_stream,
     upload,
 )
 from app.utils.logger import logger
@@ -48,28 +51,28 @@ async def upload_file(
     return {"code": 0, "message": "文件上传成功，已建立索引，可以开始提问"}
 
 
-# 问答
-@router.post("/ask")
-async def ask(
-    request: QuestionRequest,
-):
-    try:
-        # need_retrieval通过关键词列表判断的
-        if need_retrieval(request.question):
-            return StreamingResponse(
-                ask_question_rag(request.question), media_type="text/event-stream"
-            )
-        else:
-            return StreamingResponse(
-                normal_chat_stream(request.question), media_type="text/event-stream"
-            )
+# 弃用-无tools问答
+# @router.post("/ask")
+# async def ask(
+#     request: QuestionRequest,
+# ):
+#     try:
+#         # need_retrieval通过关键词列表判断的
+#         if need_retrieval(request.question):
+#             return StreamingResponse(
+#                 ask_question_rag(request.question), media_type="text/event-stream"
+#             )
+#         else:
+#             return StreamingResponse(
+#                 normal_chat_stream(request.question), media_type="text/event-stream"
+#             )
 
-    except Exception as e:
-        return StreamingResponse(
-            # 转化成迭代器
-            iter([f"data: {json.dumps({'error': str(e)})}\n\n"]),
-            media_type="text/event-stream",
-        )
+#     except Exception as e:
+#         return StreamingResponse(
+#             # 转化成迭代器
+#             iter([f"data: {json.dumps({'error': str(e)})}\n\n"]),
+#             media_type="text/event-stream",
+#         )
 
 
 # 获取文件列表
@@ -123,138 +126,194 @@ async def agent_ask_stream(
                 "desc": f"/agent接口请求开始，用户 {user_id} 开始提问",
             },
         )
-        try:
-            #  用当前问题检索向量记忆
-            memory_context = _vector_memory.get_context_prompt(
-                user_id, request.question
-            )
-            agent = get_agent(user_id, memory_context)
-            print(
-                f"⏰ [{time.strftime('%H:%M:%S')}] Agent 已获取，耗时 {time.time() - start_time:.2f}s"
-            )
-            # 用 thread_id 区分会话，
-            config = RunnableConfig(
-                {
-                    "configurable": {"thread_id": f"{user_id}_session_001"},
-                    # 控制最大步数
-                    "recursion_limit": 6,
-                }
-            )
-            sources = []
-            #  使用 astream 流式执行
-            async for event in agent.astream_events(
-                {"messages": [("user", request.question)]},
-                config=config,
-                version="v1",
-            ):
-                kind = event["event"]
-                print(f"事件: {kind}")
-
-                # LLM 生成 token
-                if kind == "on_chat_model_stream":
-                    chunk = event["data"].get("chunk")
-                    # 必须取 .content 字符串，不要序列化整个 AIMessageChunk 对象
-                    if chunk and chunk.content:
-                        text = chunk.content
-                        yield f"data: {json.dumps({'type': 'content', 'content': text}, ensure_ascii=False)}\n\n"
-
-                # 工具开始调用（参数是完整的）
-                elif kind == "on_tool_start":
-                    tool_name = event["name"]
-                    tool_input = event["data"].get("input", {})
-                    print(f"🔧 调用工具: {tool_name}, 参数: {tool_input}")
-                    tool_calls.append(tool_name)
-                    yield f"data: {json.dumps({'type': 'tool_call', 'tool': tool_name, 'args': tool_input})}\n\n"
-
-                # 工具调用结束
-                elif kind == "on_tool_end":
-                    tool_msg = event["data"].get("output")
-                    if tool_msg and hasattr(tool_msg, "content"):
-                        tool_out = tool_msg.content
-                        try:
-                            data = json.loads(tool_out)
-                            sources = data.get("sources", [])
-                            # 推送来源给前端
-                            yield f"data: {json.dumps({'type': 'sources', 'sources': sources})}\n\n"
-                        except json.JSONDecodeError:
-                            # 兜底兼容旧格式
-                            pass
-            yield f"data: {json.dumps({'done': True})}\n\n"
-            #  记录请求完成
-            elapsed = time.time() - start_time
-            logger.log(
-                "request",
-                {
-                    "user_id": user_id,
-                    "question": request.question,
-                    "tool_calls": tool_calls,
-                    "latency": round(elapsed, 3),
-                    "status": "completed",
-                    "desc": f"/agent接口请求结束：用户 {user_id} 提问完成，耗时 {round(elapsed, 3)}s",
-                },
-            )
-            #  生产级：提取用户信息（不阻塞流式输出）
-            # 对话结束后，检查是否需要更新用户画像
-            print("对话结束-done")
-            final_state = agent.get_state(config)
-            if final_state and final_state.values:
-                print(f"🔍 final_state.values 的 keys: {final_state.values.keys()}")
-                print(f"🔍 final_state.values 完整内容: {final_state.values}")
-
-                messages = final_state.values.get("messages", [])
-                if messages:
-                    # 只取用户消息
-                    user_messages = [
-                        m for m in messages if hasattr(m, "type") and m.type == "human"
-                    ]
-                    conversation_text = "\n".join(
-                        [
-                            f"{'用户' if hasattr(m, 'type') and m.type == 'human' else '助手'}：{getattr(m, 'content', '')}"
-                            for m in messages
+        force_query = False
+        print(f"request.question.lower():{request.question.lower()}")
+        # ✅ 检测 query: 前缀
+        if request.question.lower().startswith("query:"):
+            user_question = request.question[6:].strip()
+            print(f"请使用 sql_placeholder 工具查询数据库：{user_question}")
+            force_query = True
+            if not user_question:
+                raise HTTPException(status_code=400, detail="查询内容不能为空")
+            try:
+                #  用当前问题检索向量记忆
+                memory_context = _vector_memory.get_context_prompt(
+                    user_id, request.question
+                )
+                print(
+                    f"⏰ [{time.strftime('%H:%M:%S')}] Agent 已获取，耗时 {time.time() - start_time:.2f}s"
+                )
+                thread_id = f"{user_id}_session_001"
+                # 用 thread_id 区分会话，
+                config = RunnableConfig(
+                    {
+                        "configurable": {
+                            "thread_id": thread_id,
+                            "memory_context": memory_context,
+                        },
+                        # 控制最大步数
+                        "recursion_limit": 10,
+                    }
+                )
+                sources = []
+                if force_query:
+                    input_payload = MessagesState(
+                        messages=[
+                            HumanMessage(
+                                content=f"请使用 sql_placeholder 工具查询数据库：{user_question}"
+                            )
                         ]
                     )
-                    if user_messages:
-                        # 获取最近1条用户消息
-                        recent_content = "\n".join(
-                            [getattr(m, "content", "") for m in user_messages[-1:]]
-                        )
-
-                        # ✅ 每轮都检查当前消息是否包含关键词
-                        print(f"🔍 检查消息: {recent_content[:50]}...")
-                        print(f"🔍 message长度: {len(messages)}")
-                        if has_potential_info(recent_content):
-                            print("🔍 规则命中")
-
-                            background_tasks.add_task(
-                                async_extract_and_update,
-                                user_id,
-                                messages.copy(),
-                            )
-                        else:
-                            print("⏭️ 规则未命中，跳过提取标签")
-
-                    background_tasks.add_task(
-                        _vector_memory.store,
-                        user_id,
-                        conversation_text,
+                else:
+                    input_payload = MessagesState(
+                        messages=[HumanMessage(content=user_question)]
                     )
+                    # 第一个事件先把 thread_id 推给前端
+                yield f"data: {json.dumps({'type': 'thread_id', 'thread_id': thread_id})}\n\n"
+                #  使用 astream 流式执行
+                async for mode, data in agent_graph.astream(
+                    input_payload,
+                    config=config,
+                    stream_mode=["custom"],
+                ):
+                    if not isinstance(data, dict):
+                        continue
 
-        except Exception as e:
-            import traceback
+                    # ========== 类型1：LLM 流式 token（打字机效果）==========
+                    if data.get("type") == "content":
+                        yield f"data: {json.dumps({'type': 'token', 'content': data['content']}, ensure_ascii=False)}\n\n"
+                        continue
 
-            traceback.print_exc()
-            #  记录错误
-            logger.log(
-                "error",
-                {
-                    "user_id": user_id,
-                    "question": request.question,
-                    "error": str(e),
-                    # 完整错误堆栈，可能暴露代码路径和内部逻辑，通常记录在服务端日志里，不返回给前端
-                    "traceback": traceback.format_exc(),
-                    "desc": f"用户 {user_id} 请求失败",
-                },
-            )
-            yield f"data: {json.dumps({'type': 'error', 'error': str(e)})}\n\n"
+                    # ========== 类型2：你 writer 推送的自定义事件 ==========
+                    if "event" not in data:
+                        continue
+
+                    event = data
+                    kind = event["event"]
+                    print(f"事件: {kind}")
+
+                    if kind == "__interrupt__":
+                        yield f"data: {json.dumps({'type': 'interrupt', 'data': event['data']}, ensure_ascii=False)}\n\n"
+                        break
+
+                    elif kind == "sql_apply_start":
+                        payload = {
+                            "type": "tool_call",
+                            "tool": event["name"],
+                            "args": event["input"],
+                        }
+                        yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+
+                    elif kind == "sql_approval_done":
+                        status = event["status"]
+                        msg = event["message"]
+                        print(f"📌 SQL审批完成，状态:{status}, {msg}")
+                        yield f"data: {json.dumps({'type': 'notify', 'text': msg}, ensure_ascii=False)}\n\n"
+
+                    elif kind == "sql_query_done":
+                        tool_output = event["output"]
+                        if isinstance(tool_output, dict) and "sources" in tool_output:
+                            sources = tool_output["sources"]
+                            yield f"data: {json.dumps({'type': 'sources', 'sources': sources}, ensure_ascii=False)}\n\n"
+
+                    elif kind == "on_tool_start":
+                        payload = {
+                            "type": "tool_call",
+                            "tool": event["name"],
+                            "args": event["input"],
+                        }
+                        yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+
+                    elif kind == "on_tool_end":
+                        tool_name = event["name"]
+                        tool_output = event["output"]
+                        print(f"✅ 工具结束: {tool_name}")
+
+                        try:
+                            if isinstance(tool_output, str):
+                                parsed = json.loads(tool_output)
+                                if "sources" in parsed:
+                                    sources = parsed["sources"]
+                                    yield f"data: {json.dumps({'type': 'sources', 'sources': sources}, ensure_ascii=False)}\n\n"
+                        except json.JSONDecodeError:
+                            pass
+                yield f"data: {json.dumps({'done': True})}\n\n"
+            except GraphInterrupt as e:
+                # ✅ 中断信号
+                yield f"data: {json.dumps({'type': 'interrupt', 'data': e.args[0]})}\n\n"
+
+            except Exception as e:
+                import traceback
+
+                traceback.print_exc()
+                #  记录错误
+                logger.log(
+                    "error",
+                    {
+                        "user_id": user_id,
+                        "question": request.question,
+                        "error": str(e),
+                        # 完整错误堆栈，可能暴露代码路径和内部逻辑，通常记录在服务端日志里，不返回给前端
+                        "traceback": traceback.format_exc(),
+                        "desc": f"用户 {user_id} 请求失败",
+                    },
+                )
+                yield f"data: {json.dumps({'type': 'error', 'error': str(e)})}\n\n"
 
     return StreamingResponse(generate(), media_type="text/event-stream")
+
+
+@router.post("/agent/sql/approve")
+async def approve_sql(request: ApprovalRequest):
+    """用户点击确认"""
+    thread_id = request.thread_id
+    config: RunnableConfig = {"configurable": {"thread_id": thread_id}}
+
+    async def event_generator():
+        async for chunk in agent_graph.astream(
+            Command(resume={"status": "approved"}),
+            config,
+            stream_mode=["custom"],
+        ):
+            data = chunk[1] if isinstance(chunk, tuple) else chunk
+            if not isinstance(data, dict):
+                continue
+            # LLM token 输出（call_llm_node 里 writer 推送的 content）
+            if data.get("type") == "content":
+                yield f"data: {json.dumps({'type': 'token', 'content': data['content']}, ensure_ascii=False)}\n\n"
+                continue
+            event = data["event"]
+
+            if event == "on_tool_end":
+                tool_output = data.get("output")
+                try:
+                    if isinstance(tool_output, str):
+                        parsed = json.loads(tool_output)
+                        if "sources" in parsed:
+                            yield f"data: {json.dumps({'type': 'sources', 'sources': parsed['sources']}, ensure_ascii=False)}\n\n"
+                except json.JSONDecodeError:
+                    pass
+
+            elif event == "sql_query_done":
+                tool_output = data.get("output")
+                if isinstance(tool_output, dict) and "sources" in tool_output:
+                    yield f"data: {json.dumps({'type': 'sources', 'sources': tool_output['sources']}, ensure_ascii=False)}\n\n"
+
+            if "event" not in data:
+                continue
+
+        yield f"data: {json.dumps({'done': True})}\n\n"
+
+    return StreamingResponse(event_generator(), media_type="text/event-stream")
+
+
+@router.post("/agent/sql/reject")
+async def reject_sql(request: ApprovalRequest):
+    """用户点击取消"""
+    thread_id = request.thread_id
+    config: RunnableConfig = {"configurable": {"thread_id": thread_id}}
+    await agent_graph.ainvoke(
+        Command(resume={"status": "rejected"}),
+        config,
+    )
+    return {"ok": True}

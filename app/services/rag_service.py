@@ -5,9 +5,9 @@ from app.core.rag_engine import (
     load_document,
     split_texts,
     get_vector_store,
-    create_qa_chain,
-    stream_rag_answer,
-    stream_answer,
+    # create_qa_chain,
+    # stream_rag_answer,
+    # stream_answer,
 )
 from app.services.file_service import (
     add_file_to_cache,
@@ -48,22 +48,22 @@ def upload(file):
 
 
 # 已废弃-RetrievalQA
-def ask_question(question: str):
-    # """基于向量库回答问题"""
-    vectordb = get_vector_store()
-    qa_chain = create_qa_chain(vectordb)
-    result = qa_chain({"query": question})
-    return {
-        "answer": result.get("result", ""),
-        "sources": list(
-            set(
-                [
-                    doc.metadata.get("source", "未知来源")
-                    for doc in result.get("source_documents", [])
-                ]
-            )
-        ),
-    }
+# def ask_question(question: str):
+#     # """基于向量库回答问题"""
+#     vectordb = get_vector_store()
+#     qa_chain = create_qa_chain(vectordb)
+#     result = qa_chain({"query": question})
+#     return {
+#         "answer": result.get("result", ""),
+#         "sources": list(
+#             set(
+#                 [
+#                     doc.metadata.get("source", "未知来源")
+#                     for doc in result.get("source_documents", [])
+#                 ]
+#             )
+#         ),
+#     }
 
 
 # 删除文件
@@ -71,21 +71,21 @@ def delete_file(fileName: str):
     return remove_file_from_cache(fileName)
 
 
-# rag流式问答
-async def ask_question_rag(question: str) -> AsyncIterator[str]:
-    # ⬇️ 这里未来可以加逻辑
-    # 1. 规则过滤（如敏感词）
-    # 2. LLM 判断（如意图识别）
-    # 3. 降级逻辑（如模型不可用用备用方案）
-    # 4. 埋点/日志
-    async for chunk in stream_rag_answer(question):
-        yield chunk
+# 弃用-rag流式问答-不接入tools使用
+# async def ask_question_rag(question: str) -> AsyncIterator[str]:
+#     # ⬇️ 这里未来可以加逻辑
+#     # 1. 规则过滤（如敏感词）
+#     # 2. LLM 判断（如意图识别）
+#     # 3. 降级逻辑（如模型不可用用备用方案）
+#     # 4. 埋点/日志
+#     async for chunk in stream_rag_answer(question):
+#         yield chunk
 
 
 # 无rag普通流式
-async def normal_chat_stream(question: str) -> AsyncIterator[str]:
-    async for chunk in stream_answer(question):
-        yield chunk
+# async def normal_chat_stream(question: str) -> AsyncIterator[str]:
+#     async for chunk in stream_answer(question):
+#         yield chunk
 
 
 # 判断是否需要检索知识库

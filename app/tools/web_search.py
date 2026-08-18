@@ -1,16 +1,31 @@
 import os
 import time
 
+import httpx
 from langchain_core.tools import tool
 from tavily import TavilyClient
 
 from app.tools.schemas import WebSearchInput
+from app.utils.retry import retry
 
 # 初始化客户端
 tavily = TavilyClient(api_key=os.getenv("TAVILY_API_KEY"))
 
 
+def on_retry(name, attempt, error, delay):
+    print(f"⏳ {name} 重试 {attempt} 次，等待 {delay:.2f}s，错误: {error}")
+
+
 @tool(args_schema=WebSearchInput)
+@retry(
+    max_retries=3,
+    base_delay=1.0,
+    backoff=2.0,
+    max_delay=30.0,
+    jitter=0.2,
+    exceptions=(httpx.TimeoutException, httpx.ConnectError),
+    on_retry=on_retry,
+)
 def web_search(query: str) -> str:
     """搜索互联网上的最新信息、新闻、实时数据。"""
     start = time.time()

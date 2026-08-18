@@ -1,27 +1,25 @@
 # RAG 核心逻辑（加载、切片、向量库）
+# import json
 import os
-import json
 
-# 读取 PDF 和 TXT 文件，转成 Document 对象
-from langchain_community.document_loaders import PyPDFLoader, TextLoader
-
-# 把长文档切成小块
-from langchain.text_splitter import RecursiveCharacterTextSplitter
+# from collections.abc import AsyncIterator
+from dotenv import load_dotenv
 
 # 向量数据库，存向量，查相似
 from langchain_chroma import Chroma
 
 # 用 DeepSeek 生成回答
-from langchain_community.chat_models import ChatOpenAI
-
-# 检索链
-from langchain.chains import RetrievalQA
+# from langchain_community.chat_models import ChatOpenAI
+# 读取 PDF 和 TXT 文件，转成 Document 对象
+from langchain_community.document_loaders import PyPDFLoader, TextLoader
 
 # 把文本转化成向量
 from langchain_community.embeddings import ZhipuAIEmbeddings
-from typing import AsyncIterator
-from dotenv import load_dotenv
 
+# 检索链
+# from langchain.chains.retriever_qa import RetrievalQA
+# 把长文档切成小块
+from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 # 向量库持久化目录
 PERSIST_DIR = "./chroma_db"
@@ -119,89 +117,89 @@ def delete_file_from_store(file_name: str) -> int:
 
 
 # 已弃用-流式问答-不接入tools时用
-async def stream_chat(question: str, context: str) -> AsyncIterator[str]:
-    try:
-        if context:
-            prompt = f"""你是一个专业的知识库助手。请根据以下文档内容回答用户的问题。
-            如果文档中没有相关信息，请如实说"文档中未提及"。
-            不要编造答案，不要使用文档外的知识。
+# async def stream_chat(question: str, context: str) -> AsyncIterator[str]:
+#     try:
+#         if context:
+#             prompt = f"""你是一个专业的知识库助手。请根据以下文档内容回答用户的问题。
+#             如果文档中没有相关信息，请如实说"文档中未提及"。
+#             不要编造答案，不要使用文档外的知识。
 
-            文档内容：
-            {context}
+#             文档内容：
+#             {context}
 
-            用户问题：{question}"""
-        else:
-            prompt = question
-        llm = ChatOpenAI(
-            model="deepseek-chat",
-            api_key=os.getenv("DEEPSEEK_API_KEY"),
-            base_url="https://api.deepseek.com/v1",
-            temperature=0.3 if context else 0.7,
-            streaming=True,
-        )
-        async for chunk in llm.astream(prompt):
-            content = chunk.content
-            if content:
-                yield f"data: {json.dumps({'content': content})}\n\n"
+#             用户问题：{question}"""
+#         else:
+#             prompt = question
+#         llm = ChatOpenAI(
+#             model="deepseek-chat",
+#             api_key=os.getenv("DEEPSEEK_API_KEY"),
+#             base_url="https://api.deepseek.com/v1",
+#             temperature=0.3 if context else 0.7,
+#             streaming=True,
+#         )
+#         async for chunk in llm.astream(prompt):
+#             content = chunk.content
+#             if content:
+#                 yield f"data: {json.dumps({'content': content})}\n\n"
 
-    except Exception as e:
-        yield f"data: {json.dumps({'error': str(e)})}\n\n"
-
-
-# 已弃用-rag流式-不接入tools时用
-async def stream_rag_answer(question: str) -> AsyncIterator[str]:
-    try:
-        vectordb = get_vector_store()
-        # 把向量库包装成 LangChain 检索器，需要返回3个最相似的文档块
-        retriever = vectordb.as_retriever(search_kwargs={"k": 5})
-        # 组件运行，docs的类型是List[Document]，有page_content和page_meta
-        docs = retriever.invoke(question)
-
-        # 提取来源：——遍历docs，取出source中的文件名，并用set转成集合去重，再用list转成列表
-        sources = list(
-            {os.path.basename(doc.metadata.get("source", "未知来源")) for doc in docs}
-        )
-        context = "\n\n".join([doc.page_content for doc in docs])
-        # 异步流式调用 LLM，每次返回一个字符块,异步迭代，每收到一个字符块就执行一次循环
-        async for chunk in stream_chat(question, context):
-            yield chunk
-        # 返回来源+done
-        yield f"data: {json.dumps({'sources': sources, 'done': True})}\n\n"
-
-    except Exception as e:
-        yield f"data: {json.dumps({'error': str(e)})}\n\n"
+#     except Exception as e:
+#         yield f"data: {json.dumps({'error': str(e)})}\n\n"
 
 
-# 已弃用-普通流式
-async def stream_answer(question: str) -> AsyncIterator[str]:
-    try:
-        async for chunk in stream_chat(question, ""):
-            yield chunk
-        yield f"data: {json.dumps({'done': True})}\n\n"
-    except Exception as e:
-        yield f"data: {json.dumps({'error': str(e)})}\n\n"
+# # 已弃用-rag流式-不接入tools时用
+# async def stream_rag_answer(question: str) -> AsyncIterator[str]:
+#     try:
+#         vectordb = get_vector_store()
+#         # 把向量库包装成 LangChain 检索器，需要返回3个最相似的文档块
+#         retriever = vectordb.as_retriever(search_kwargs={"k": 5})
+#         # 组件运行，docs的类型是List[Document]，有page_content和page_meta
+#         docs = retriever.invoke(question)
+
+#         # 提取来源：——遍历docs，取出source中的文件名，并用set转成集合去重，再用list转成列表
+#         sources = list(
+#             {os.path.basename(doc.metadata.get("source", "未知来源")) for doc in docs}
+#         )
+#         context = "\n\n".join([doc.page_content for doc in docs])
+#         # 异步流式调用 LLM，每次返回一个字符块,异步迭代，每收到一个字符块就执行一次循环
+#         async for chunk in stream_chat(question, context):
+#             yield chunk
+#         # 返回来源+done
+#         yield f"data: {json.dumps({'sources': sources, 'done': True})}\n\n"
+
+#     except Exception as e:
+#         yield f"data: {json.dumps({'error': str(e)})}\n\n"
 
 
-# 已弃用  非流式——创建问答链，自动检索，拼接prompt，调用llm，返回answer
-def create_qa_chain(vectordb):
-    # 初始化聊天模型
-    api_key = os.getenv("DEEPSEEK_API_KEY")
-    if not api_key:
-        raise ValueError("请设置环境变量 DEEPSEEK_API_KEY")
-    llm = ChatOpenAI(
-        model="deepseek-chat",
-        api_key=api_key,
-        base_url="https://api.deepseek.com/v1",
-        # 0保守，1放飞
-        temperature=0.3,
-    )
-    # 创建检索器，表示每次检索返回最相似的 3 个文档块
-    retriever = vectordb.as_retriever(search_kwargs={"k": 5})
-    # 用 LangChain 创建一个 RAG 问答链
-    return RetrievalQA.from_chain_type(
-        llm=llm,
-        # staff是是完全拼接模式
-        chain_type="stuff",
-        retriever=retriever,
-        return_source_documents=True,
-    )
+# # 已弃用-普通流式
+# async def stream_answer(question: str) -> AsyncIterator[str]:
+#     try:
+#         async for chunk in stream_chat(question, ""):
+#             yield chunk
+#         yield f"data: {json.dumps({'done': True})}\n\n"
+#     except Exception as e:
+#         yield f"data: {json.dumps({'error': str(e)})}\n\n"
+
+
+# # 已弃用  非流式——创建问答链，自动检索，拼接prompt，调用llm，返回answer
+# def create_qa_chain(vectordb):
+#     # 初始化聊天模型
+#     api_key = os.getenv("DEEPSEEK_API_KEY")
+#     if not api_key:
+#         raise ValueError("请设置环境变量 DEEPSEEK_API_KEY")
+#     llm = ChatOpenAI(
+#         model="deepseek-chat",
+#         api_key=api_key,
+#         base_url="https://api.deepseek.com/v1",
+#         # 0保守，1放飞
+#         temperature=0.3,
+#     )
+#     # 创建检索器，表示每次检索返回最相似的 3 个文档块
+#     retriever = vectordb.as_retriever(search_kwargs={"k": 5})
+#     # 用 LangChain 创建一个 RAG 问答链
+#     return RetrievalQA.from_chain_type(
+#         llm=llm,
+#         # staff是是完全拼接模式
+#         chain_type="stuff",
+#         retriever=retriever,
+#         return_source_documents=True,
+#     )
