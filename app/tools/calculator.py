@@ -1,6 +1,8 @@
+import numexpr as ne
 from langchain_core.tools import tool
 
 from app.tools.schemas import CalculatorInput
+from app.utils.logger import logger
 
 
 @tool(args_schema=CalculatorInput)
@@ -17,8 +19,12 @@ def calculator(expression: str) -> str:
         allowed = set("0123456789+-*/().% ")
         if not all(c in allowed for c in expression):
             return "错误：表达式包含非法字符"
-        # 高风险，加二次校验
-        result = eval(expression)
+        #  使用 numexpr 执行计算
+        result = ne.evaluate(expression)
+        logger.log(
+            "tool",
+            {"operation": "calculator", "desc": f"calculator 计算结果: {result}"},
+        )
         return f"计算结果：{result}"
 
     except ZeroDivisionError:

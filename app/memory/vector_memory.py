@@ -13,20 +13,23 @@ from pydantic import SecretStr
 class VectorMemory:
     """自由文本 + 向量检索 的长期记忆（模糊信息）"""
 
-    # ✅ 用智谱替代 HuggingFace
     def __init__(self, persist_dir: str = "./user_memory_db"):
         self.persist_dir = persist_dir
         os.makedirs(persist_dir, exist_ok=True)
-        api_key = os.getenv("ZHIPUAI_API_KEY")
+        zhipu_api_key = os.getenv("ZHIPUAI_API_KEY")
+        deepseek_api_key = os.getenv("DEEPSEEK_API_KEY")
 
-        if not api_key:
+        if not zhipu_api_key:
+            raise ValueError("请设置环境变量 ZHIPUAI_API_KEY")
+
+        if not deepseek_api_key:
             raise ValueError("请设置环境变量 DEEPSEEK_API_KEY")
 
-        self.embeddings = ZhipuAIEmbeddings(model="embedding-2", api_key=api_key)
+        self.embeddings = ZhipuAIEmbeddings(model="embedding-3", api_key=zhipu_api_key)
 
         self.llm = ChatOpenAI(
             model="deepseek-chat",
-            api_key=SecretStr(api_key),
+            api_key=SecretStr(deepseek_api_key),
             base_url="https://api.deepseek.com/v1",
             temperature=0.1,
         )

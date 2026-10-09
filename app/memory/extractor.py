@@ -68,10 +68,7 @@ class UserInfoExtractor:
 
         try:
             content = content.strip()
-            logger.log(
-                "memory",
-                {"operation": "extract", "desc": f"strip 后: {content!r}"},
-            )
+
             return json.loads(content)
         except (json.JSONDecodeError, ValueError) as e:
             logger.log(

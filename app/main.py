@@ -27,5 +27,5 @@ os.makedirs(UPLOAD_DIR, exist_ok=True)
 app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
 
 # 注册路由，如果有多个，就注册多次，tags为了在docs里好看
-app.include_router(chat.router, prefix="", tags=["chat"])
-app.include_router(rag.router)
+app.include_router(chat.router, prefix="/chat", tags=["chat"])
+app.include_router(rag.router, prefix="/rag", tags=["rag"])

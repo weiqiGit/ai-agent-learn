@@ -1,7 +1,7 @@
-import json
+import asyncio
 import os
 from datetime import datetime, timezone
-from typing import Literal, Optional, cast
+from typing import Annotated, Literal, NotRequired, Optional, TypedDict, cast
 
 from dotenv import load_dotenv
 from langchain_core.messages import (
@@ -10,6 +10,7 @@ from langchain_core.messages import (
     BaseMessage,
     SystemMessage,
     ToolMessage,
+    trim_messages,
 )
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import StructuredTool
@@ -17,28 +18,38 @@ from langchain_openai import ChatOpenAI
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.config import get_stream_writer
 from langgraph.graph import START, StateGraph
-from langgraph.graph.message import MessagesState
+from langgraph.graph.message import add_messages
 from langgraph.types import interrupt
 from pydantic import SecretStr
 
 # 给LLM暴露的全部工具：增加占位工具，真实sql_query不在这里！
 # 业务模块导入
 from app.memory.user_profile import UserProfileMemory
+from app.memory.vector_memory import VectorMemory
 from app.models.schemas import SQLPlaceholderInput
+from app.services.rag_service import async_extract_and_update
 from app.tools import calculator, knowledge_search, web_search
 from app.tools.sql_query import sql_query
 
 load_dotenv()
+
+
+class MessagesState(TypedDict):
+    messages: Annotated[list, add_messages]
+    approval_pushed: NotRequired[bool]
+
 
 # ===================== 全局配置 =====================
 BASE_SYSTEM_PROMPT = """你是一个智能助手。当用户提出问题时，必须考虑是否需要使用工具。
 1. 用户没有明确询问公司信息时，不要主动提及公司
 2. 只回答用户直接问的问题，不要过度延伸
 3. 记住用户说的个人信息，但不要自己发挥
-
+重要约束：
+1. 面向用户输出的所有最终回答，只允许中文。任何工具规划、查询动作的英文描述，仅保留在内部，严禁返回给用户，不要输出任何英文句子。
+2. 不要输出查询预告类语句（例如“我将查询xxx数据”），直接执行工具调用，拿到结果后再整理中文回答给用户。
 工具规则：
 1. knowledge_search：查询公司内部文档、制度、流程、产品手册。询问公司相关内容必须调用
-2. web_search：搜索互联网最新信息、新闻、实时数据，外部信息使用，不要重复搜索
+2. web_search：搜索互联网最新信息、新闻、实时数据，外部信息使用，已有结果足够就不要重复搜索
 3. calculator：数学计算，涉及计算必须调用工具，禁止心算
 4. sql_placeholder：提交数据库查询申请，用于数据分析统计。该申请需要人工审批，不能直接获取数据。
 
@@ -47,6 +58,7 @@ BASE_SYSTEM_PROMPT = """你是一个智能助手。当用户提出问题时，�
 
 _profile_memory = UserProfileMemory()
 _checkpointer = InMemorySaver()
+
 
 # 普通工具（可直接执行）
 normal_tools = [
@@ -139,34 +151,30 @@ async def call_llm_node(
 ):
     writer = get_stream_writer()
     messages = state["messages"]
+    trimmed = trim_messages(
+        messages,
+        max_tokens=4000,
+        strategy="last",
+        token_counter=len,  # 简化版：用消息条数估算，后期可以改成tiktoken
+        include_system=True,
+    )
     configurable = config.get("configurable", {})
     user_id = configurable.get("user_id", "default")
     memory_context = configurable.get("memory_context", "")
 
-    # ========== 你的Prompt逻辑保持原样 ==========
     user_context = _profile_memory.get_context_prompt(user_id)
     full_system_text = BASE_SYSTEM_PROMPT
     today = datetime.now(timezone.utc).strftime("%Y年%m月%d日")
-    full_system_text += f"\n【当前日期】{today}"  # ← 加这行
+    full_system_text += f"\n【当前日期】{today}"
     full_system_text += (
         f"\n【用户信息】\n{user_context if user_context else '暂无用户信息'}"
     )
     full_system_text += (
         f"\n【用户记忆】\n{memory_context if memory_context else '暂无用户记忆'}"
     )
-    full_messages = [SystemMessage(content=full_system_text)] + messages
+    full_messages = [SystemMessage(content=full_system_text)] + trimmed
 
     full_chunk: Optional[AIMessageChunk] = None
-    print("\n=== call_llm_node messages ===")
-    for i, msg in enumerate(state["messages"]):
-        t = type(msg).__name__
-        tcs = getattr(msg, "tool_calls", None)
-        tcid = getattr(msg, "tool_call_id", None)
-        content = str(msg.content)[:60]
-        print(
-            f"[{i}] {t} | tool_calls={bool(tcs)} | tool_call_id={tcid} | content={content}"
-        )
-    print("==============================\n")
 
     async for raw_chunk in llm_with_tools.astream(full_messages):
         # 过滤非AI流块（防御）
@@ -187,6 +195,32 @@ async def call_llm_node(
 
     if full_chunk is None:
         raise RuntimeError("LLM 未返回任何输出 chunk")
+
+    # ========== ✅ 向量记忆存储（异步，不阻塞） ==========
+    try:
+        configurable = config.get("configurable", {})
+        user_id = configurable.get("user_id", "default")
+
+        # 异步存储，不等待结果
+        async def background_tasks():
+            # 1. 向量记忆存储
+            vm = VectorMemory()
+            conversation_text = "\n".join(
+                [
+                    f"{'用户' if hasattr(m, 'type') and m.type == 'human' else '助手'}：{getattr(m, 'content', '')}"
+                    for m in state["messages"]
+                ]
+            )
+            vm.store(user_id, conversation_text)
+
+            # 2. 用户标签提取
+            await async_extract_and_update(user_id, state["messages"])
+
+        asyncio.create_task(background_tasks())
+
+    except Exception as e:
+        print(f"⚠️ 向量记忆存储触发失败: {e}")
+        # 不影响主流程，静默失败
 
     ai_msg = AIMessage(
         content=full_chunk.content,
@@ -257,36 +291,44 @@ async def sql_approval_node(state: MessagesState):
     query_args = tool_call["args"]
     tool_name = tool_call["name"]
 
-    # ========== 2. 推送审批开始事件 ==========
-    writer(
-        {
-            "event": "sql_apply_start",
-            "name": tool_name,
-            "input": query_args,
+    # 判断是否已推送
+    if not state.get("approval_pushed", False):
+        writer(
+            {
+                "event": "sql_apply_start",
+                "name": tool_name,
+                "input": query_args,
+                "tool_call_id": tool_call_id,
+            }
+        )
+        interrupt_data = {
+            "type": "sql_approval",
+            "tool": tool_name,
+            "args": query_args,
             "tool_call_id": tool_call_id,
+            "message": "即将提交数据库查询申请，请管理员确认是否允许执行",
         }
-    )
-
-    interrupt_data = {
-        "type": "sql_approval",
-        "tool": tool_name,
-        "args": query_args,
-        "tool_call_id": tool_call_id,
-        "message": "即将提交数据库查询申请，请管理员确认是否允许执行",
-    }
-    writer({"event": "__interrupt__", "data": interrupt_data})
+        writer({"event": "__interrupt__", "data": interrupt_data})
+    # ========== 2. 推送审批开始事件 ==========
+    else:
+        interrupt_data = {
+            "type": "sql_approval",
+            "tool": tool_name,
+            "args": query_args,
+            "tool_call_id": tool_call_id,
+            "message": "即将提交数据库查询申请，请管理员确认是否允许执行",
+        }
 
     # ========== 3. 暂停，等待用户审批 ==========
     approval_result = interrupt(interrupt_data)
 
-    is_rejected = (
-        not approval_result
-        or isinstance(approval_result, dict)
-        and approval_result.get("status") == "rejected"
+    is_approved = (
+        isinstance(approval_result, dict)
+        and approval_result.get("status") == "approved"
     )
 
     # ========== 4. 审批拒绝：直接返回驳回 ToolMessage ==========
-    if is_rejected:
+    if not is_approved:
         writer(
             {
                 "event": "sql_approval_done",

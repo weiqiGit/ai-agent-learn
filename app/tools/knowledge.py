@@ -5,6 +5,7 @@ from langchain_core.tools import tool
 
 from app.core.rag_engine import get_vector_store
 from app.tools.schemas import KnowledgeSearchInput
+from app.utils.logger import logger
 from app.utils.retry import retry
 
 
@@ -49,7 +50,13 @@ def knowledge_search(query: str) -> str:
         resp_data = {"content": content, "sources": sources}
         result_json = json.dumps(resp_data, ensure_ascii=False)
 
-        print(f"🔍 knowledge_search 返回JSON长度: {len(result_json)}")
+        logger.log(
+            "tool",
+            {
+                "operation": "knowledge",
+                "desc": f"knowledge 检索结果: {result_json}",
+            },
+        )
         return result_json
 
     except Exception as e:

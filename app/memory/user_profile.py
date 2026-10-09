@@ -19,7 +19,6 @@ class UserProfileMemory:
     def __init__(self, storage_dir: str = "./user_profiles"):
         self.storage_dir = storage_dir
         os.makedirs(storage_dir, exist_ok=True)
-        print("⚠️ 文件不存在啦啦啦")  # 👈 加这行
 
     def _get_file_path(self, user_id: str) -> str:
         return os.path.join(self.storage_dir, f"{user_id}.json")
@@ -28,11 +27,8 @@ class UserProfileMemory:
         try:
             file_path = self._get_file_path(user_id)
 
-            print(f"📂 尝试读取: {file_path}")  # 👈 加这行看路径
             if not os.path.exists(file_path):
-                print("⚠️ 文件不存在，返回空字典")  # 👈 加这行
                 return {}
-            print("✅ 文件存在，尝试解析 JSON")  # 👈 加这行
             with open(file_path, "r", encoding="utf-8") as f:
                 return json.load(f)
 
@@ -54,11 +50,8 @@ class UserProfileMemory:
         返回：是否有实际更新
         """
         try:
-            print(
-                f"🔍 merge 被调用, user_id: {user_id}, new_info: {new_info}"
-            )  # ← 加这行
             profile = self.get(user_id)
-            print(f"profile:{profile}")  # ← 加这行
+            print(f"profile:{profile}")
             updated = False
 
             # 合并 name
@@ -68,7 +61,7 @@ class UserProfileMemory:
                 and profile.get("name") != new_info["name"]
             ):
                 profile["name"] = new_info["name"]
-                # ✅ 清空 preferences
+                # 清空 preferences
                 if "preferences" in profile:
                     profile["preferences"] = []
                 updated = True

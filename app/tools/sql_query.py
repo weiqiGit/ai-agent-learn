@@ -2,6 +2,8 @@ import re
 import sqlite3
 from typing import Any
 
+from app.utils.logger import logger
+
 # 数据库路径，和你初始化脚本保持一致
 DB_PATH = "./data.db"
 ALLOWED_TABLES = {"orders"}
@@ -71,6 +73,13 @@ def sql_query(args: dict[str, Any]) -> dict[str, Any]:
             output_lines.append(f"\n⚠️ 结果过多，仅展示前50条，总条数：{len(rows)}")
 
         content = "\n".join(output_lines)
+        logger.log(
+            "tool",
+            {
+                "operation": "real_sql",
+                "desc": f"real_sql 执行结果: {content}",
+            },
+        )
         return {"content": content, "sources": sources}
 
     except sqlite3.Error as e:

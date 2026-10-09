@@ -6,6 +6,7 @@ from langchain_core.tools import tool
 from tavily import TavilyClient
 
 from app.tools.schemas import WebSearchInput
+from app.utils.logger import logger
 from app.utils.retry import retry
 
 # 初始化客户端
@@ -56,11 +57,18 @@ def web_search(query: str) -> str:
             return f"未找到 '{query}' 的相关结果"
 
         output = f"🔍 搜索 '{query}' 的结果：\n\n"
-        for i, item in enumerate(results[:5], 1):
+        for i, item in enumerate(results[:2], 1):
             output += f"{i}. {item.get('title', '无标题')}\n"
             output += f"   {item.get('content', '无内容')[:200]}...\n"
             output += f"   🔗 {item.get('url', '')}\n\n"
 
+        logger.log(
+            "tool",
+            {
+                "operation": "web_search",
+                "desc": f"web_search 检索结果: {output}",
+            },
+        )
         return output
 
     except Exception as e:

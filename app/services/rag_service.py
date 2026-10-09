@@ -1,23 +1,22 @@
 # 新增：RAG 业务编排——把流程串起来
 import os
 import shutil
+
 from app.core.rag_engine import (
-    load_document,
-    split_texts,
+    delete_file_from_store,
     get_vector_store,
     # create_qa_chain,
     # stream_rag_answer,
     # stream_answer,
+    load_document,
+    split_texts,
 )
+from app.memory.extractor import UserInfoExtractor
+from app.services.constants import NO_RETRIEVAL_KEYWORDS
 from app.services.file_service import (
     add_file_to_cache,
     remove_file_from_cache,
 )
-from typing import AsyncIterator
-from app.services.constants import NO_RETRIEVAL_KEYWORDS
-from app.memory.extractor import UserInfoExtractor
-from app.core.agent import _profile_memory
-
 
 UPLOAD_DIR = "./uploads"
 
@@ -68,6 +67,7 @@ def upload(file):
 
 # 删除文件
 def delete_file(fileName: str):
+    delete_file_from_store(fileName)
     return remove_file_from_cache(fileName)
 
 
@@ -108,6 +108,8 @@ async def async_extract_and_update(user_id: str, messages: list):
         print(f"🔍 LLM 提取结果: {extracted}")
         if extracted.get("has_new_info", False):
             print(f"✅ 用户画像还未更新: {extracted}")
+            from app.core.agent import _profile_memory  # 👈 函数内导入
+
             _profile_memory.merge(user_id, extracted)
             print(f"✅ 用户画像已更新: {extracted}")
     except Exception as e:

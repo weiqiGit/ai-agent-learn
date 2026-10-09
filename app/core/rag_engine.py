@@ -29,7 +29,7 @@ load_dotenv()
 api_key = os.getenv("ZHIPUAI_API_KEY")
 if not api_key:
     raise ValueError("请设置环境变量 ZHIPUAI_API_KEY")
-embeddings = ZhipuAIEmbeddings(model="embedding-2", api_key=api_key)
+embeddings = ZhipuAIEmbeddings(model="embedding-3", api_key=api_key)
 
 
 # 1、根据文件格式，选择不同的加载器，把文件读成Document对象
