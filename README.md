@@ -2,6 +2,10 @@ AI Agent 服务
 
 面向企业内部的 AI Agent 后端服务，支持 RAG 知识库问答、多工具调用、人工审批（HITL）和三层记忆管理。
 
+架构图
+
+<img width="1702" height="1102" alt="image" src="https://github.com/user-attachments/assets/54bad1ef-edc4-4e53-b42c-23bdbe74213a" />
+
 功能特性
 
 - RAG 知识库问答：上传 PDF/TXT 文档，自动切片、向量化、检索，回答时标注来源
